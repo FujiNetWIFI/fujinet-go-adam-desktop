@@ -86,6 +86,26 @@ On first start the app provisions `~/.local/share/fujinet-go-adam/fujinet`
 share directory, and finds `libfujinet.so` via `$FUJINET_LIB`, the install
 libdir, or the dev build output.
 
+### Installing
+
+Select the frontend at configure time and install (build the FujiNet
+runtime first so it gets installed alongside):
+
+```sh
+cmake -B build-gnome -G Ninja -DFRONTEND=gnome   # or kde, or all
+cmake --build build-gnome
+sudo cmake --install build-gnome
+```
+
+This installs the binary, desktop entry, icon, and the FujiNet runtime
+(`libfujinet.so` into `<prefix>/lib/fujinet-go-adam`, the pristine
+runtime tree into `<prefix>/share/fujinet-go-adam/fujinet`). For a
+sudo-free user install add `-DCMAKE_INSTALL_PREFIX=$HOME/.local` at
+configure time (the FujiNet search paths bake in the prefix, so choose
+it before building). Uninstall with
+`xargs rm < build-gnome/install_manifest.txt`. GNOME and KDE installs
+coexist: they share one settings store and FujiNet runtime.
+
 Useful environment switches: `ADAM_PACE_LOG=1` (per-second frame pacing
 diagnostics), `FUJINET_QUIET_BLOCKS=1` (suppress per-block disk log
 lines), `FUJINET_WEBUI_BIND=addr:port` (web UI bind, default
