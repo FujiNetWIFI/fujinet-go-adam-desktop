@@ -58,7 +58,7 @@ jobs:
           repository: FujiNetWIFI/fujinet-firmware
           path: fujinet-src
       - name: Install dependencies
-        run: brew install ninja mbedtls
+        run: brew install ninja
       # SDL3 is linked STATICALLY on macOS so the shipped .app has no
       # Homebrew (or any non-system) library dependencies -- a bundle that
       # links /opt/homebrew paths only launches on machines that happen to
@@ -81,7 +81,6 @@ jobs:
           ./tools/fujinet/build-fujinet-desktop.sh
         env:
           FUJINET_SRC: ${{ github.workspace }}/fujinet-src
-          MBEDTLS_ROOT_DIR: /opt/homebrew/opt/mbedtls
       - name: Configure
         run: cmake -B build -G Ninja
         env:

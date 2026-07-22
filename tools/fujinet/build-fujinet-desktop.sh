@@ -41,6 +41,53 @@ case "$(uname -s)" in
     *)      LIBNAME="libfujinet.so" ;;
 esac
 
+# FujiNet needs mbedTLS 3.x (Homebrew's formula moved to 4.x, which drops
+# the legacy mbedtls/md5.h fujinet includes). On macOS, build the same
+# pinned 3.6.5 the Android app uses -- with pthread threading enabled, as
+# fujinet drives TLS from several threads -- unless the caller already
+# points MBEDTLS_ROOT_DIR at a 3.x install.
+MBEDTLS_TAG="mbedtls-3.6.5"
+MBEDTLS_SOURCE_DIR="${WORK_ROOT}/mbedtls-src"
+MBEDTLS_BUILD_DIR="${WORK_ROOT}/mbedtls-build"
+MBEDTLS_INSTALL_DIR="${WORK_ROOT}/mbedtls-install"
+
+build_mbedtls_darwin() {
+    [[ "$(uname -s)" == "Darwin" ]] || return 0
+    if [[ -n "${MBEDTLS_ROOT_DIR:-}" ]]; then
+        echo "Using caller-provided MBEDTLS_ROOT_DIR=${MBEDTLS_ROOT_DIR}"
+        return 0
+    fi
+    if [[ ! -f "${MBEDTLS_INSTALL_DIR}/lib/libmbedtls.a" ]]; then
+        rm -rf "${MBEDTLS_SOURCE_DIR}" "${MBEDTLS_BUILD_DIR}" "${MBEDTLS_INSTALL_DIR}"
+        git clone --depth 1 --branch "${MBEDTLS_TAG}" --recurse-submodules \
+            --shallow-submodules https://github.com/Mbed-TLS/mbedtls.git \
+            "${MBEDTLS_SOURCE_DIR}"
+        python3 - "${MBEDTLS_SOURCE_DIR}/include/mbedtls/mbedtls_config.h" <<'PY'
+from pathlib import Path
+import sys
+config_h = Path(sys.argv[1])
+text = config_h.read_text()
+for old, new in (
+    ('//#define MBEDTLS_THREADING_C\n', '#define MBEDTLS_THREADING_C\n'),
+    ('//#define MBEDTLS_THREADING_PTHREAD\n', '#define MBEDTLS_THREADING_PTHREAD\n'),
+):
+    if old in text:
+        text = text.replace(old, new)
+config_h.write_text(text)
+PY
+        cmake -S "${MBEDTLS_SOURCE_DIR}" -B "${MBEDTLS_BUILD_DIR}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${MBEDTLS_INSTALL_DIR}" \
+            -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF \
+            -DMBEDTLS_FATAL_WARNINGS=OFF \
+            -DUSE_STATIC_MBEDTLS_LIBRARY=ON -DUSE_SHARED_MBEDTLS_LIBRARY=OFF \
+            -DLINK_WITH_PTHREAD=ON
+        cmake --build "${MBEDTLS_BUILD_DIR}" --parallel
+        cmake --install "${MBEDTLS_BUILD_DIR}"
+    fi
+    export MBEDTLS_ROOT_DIR="${MBEDTLS_INSTALL_DIR}"
+}
+
 fail() {
     echo "build-fujinet-desktop.sh: $*" >&2
     exit 1
@@ -143,6 +190,51 @@ patch("fujinet_pc.cmake", [
         'else()\n'
         '    add_executable(fujinet ${SOURCES})\n'
         'endif()\n',
+    ),
+])
+
+# --- mbedTLS resolution: honor MBEDTLS_ROOT_DIR explicitly ----------------
+# find_library does not descend into <root>/lib from a HINTS directory, so
+# a caller-provided root (the pinned 3.6.5 the macOS build makes) must be
+# resolved by explicit paths -- the same approach the Android build uses.
+# Without the env var (Linux: system mbedtls) the stock search runs.
+patch("fujinet_pc.cmake", [
+    (
+        'set(_MBEDTLS_ROOT_HINTS $ENV{MBEDTLS_ROOT_DIR} ${MBEDTLS_ROOT_DIR})\n'
+        'set(_MBEDTLS_ROOT_PATHS "$ENV{PROGRAMFILES}/libmbedtls")\n'
+        'set(_MBEDTLS_ROOT_HINTS_AND_PATHS HINTS ${_MBEDTLS_ROOT_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
+        'find_library(MBEDTLS_STATIC_LIB libmbedtls.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
+        'find_library(MBEDX509_STATIC_LIB libmbedx509.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
+        'find_library(MBEDCRYPTO_STATIC_LIB libmbedcrypto.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
+        'find_path(MBEDTLS_INCLUDE_DIR mbedtls/ssl.h HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS} PATH_SUFFIXES include)\n',
+        'if(DEFINED ENV{MBEDTLS_ROOT_DIR} AND EXISTS "$ENV{MBEDTLS_ROOT_DIR}/include/mbedtls/ssl.h")\n'
+        '    set(MBEDTLS_STATIC_LIB "$ENV{MBEDTLS_ROOT_DIR}/lib/libmbedtls.a")\n'
+        '    set(MBEDX509_STATIC_LIB "$ENV{MBEDTLS_ROOT_DIR}/lib/libmbedx509.a")\n'
+        '    set(MBEDCRYPTO_STATIC_LIB "$ENV{MBEDTLS_ROOT_DIR}/lib/libmbedcrypto.a")\n'
+        '    set(MBEDTLS_INCLUDE_DIR "$ENV{MBEDTLS_ROOT_DIR}/include")\n'
+        'else()\n'
+        '    set(_MBEDTLS_ROOT_HINTS $ENV{MBEDTLS_ROOT_DIR} ${MBEDTLS_ROOT_DIR})\n'
+        '    set(_MBEDTLS_ROOT_PATHS "$ENV{PROGRAMFILES}/libmbedtls")\n'
+        '    set(_MBEDTLS_ROOT_HINTS_AND_PATHS HINTS ${_MBEDTLS_ROOT_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
+        '    find_library(MBEDTLS_STATIC_LIB libmbedtls.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
+        '    find_library(MBEDX509_STATIC_LIB libmbedx509.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
+        '    find_library(MBEDCRYPTO_STATIC_LIB libmbedcrypto.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
+        '    find_path(MBEDTLS_INCLUDE_DIR mbedtls/ssl.h HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS} PATH_SUFFIXES include)\n'
+        'endif()\n',
+    ),
+])
+patch("components_pc/libssh/cmake/Modules/FindMbedTLS.cmake", [
+    (
+        'find_path(MBEDTLS_INCLUDE_DIR\n',
+        '# [fujinet-go-adam-desktop] Resolve a caller-pinned mbedTLS directly;\n'
+        '# see the matching block in fujinet_pc.cmake.\n'
+        'if(DEFINED ENV{MBEDTLS_ROOT_DIR} AND EXISTS "$ENV{MBEDTLS_ROOT_DIR}/include/mbedtls/ssl.h")\n'
+        '    set(MBEDTLS_INCLUDE_DIR "$ENV{MBEDTLS_ROOT_DIR}/include" CACHE PATH "" FORCE)\n'
+        '    set(MBEDTLS_SSL_LIBRARY "$ENV{MBEDTLS_ROOT_DIR}/lib/libmbedtls.a" CACHE FILEPATH "" FORCE)\n'
+        '    set(MBEDTLS_CRYPTO_LIBRARY "$ENV{MBEDTLS_ROOT_DIR}/lib/libmbedcrypto.a" CACHE FILEPATH "" FORCE)\n'
+        '    set(MBEDTLS_X509_LIBRARY "$ENV{MBEDTLS_ROOT_DIR}/lib/libmbedx509.a" CACHE FILEPATH "" FORCE)\n'
+        'endif()\n'
+        'find_path(MBEDTLS_INCLUDE_DIR\n',
     ),
 ])
 
@@ -349,6 +441,8 @@ if [[ "${FN_PATCH_ONLY:-0}" -eq 1 ]]; then
     echo "FN_PATCH_ONLY: staged and patched ${CLONE_DIR}; skipping build."
     exit 0
 fi
+
+build_mbedtls_darwin
 
 (
     cd "${CLONE_DIR}"
