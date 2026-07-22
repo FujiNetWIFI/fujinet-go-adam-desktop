@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>online.fujinet.go.adam.gnome</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>FujiNet Go Adam</name>
+  <summary>Self-contained Coleco ADAM with built-in FujiNet</summary>
+  <description>
+    <p>
+      A Coleco ADAM (and ColecoVision) with FujiNet built in: mount disk
+      and data-pack images from TNFS servers or the local SD folder,
+      configure everything through the embedded FujiNet web UI, and play
+      with automatic gamepad support. For developers it includes a full
+      debugger with breakpoints, stepping, instruction history, EOS/OS7
+      symbols, and live VDP table viewers.
+    </p>
+  </description>
+  <launchable type="desktop-id">online.fujinet.go.adam.gnome.desktop</launchable>
+  <url type="homepage">https://fujinet.online/</url>
+  <developer_name>Thomas Cherryhomes</developer_name>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-07-22"/>
+  </releases>
+</component>

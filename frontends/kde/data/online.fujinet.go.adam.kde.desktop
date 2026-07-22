@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FujiNet Go Adam
+GenericName=Coleco ADAM with FujiNet
+Comment=Self-contained Coleco ADAM computer with built-in FujiNet
+Exec=fujinet-go-adam-kde
+Icon=online.fujinet.go.adam.kde
+Terminal=false
+Categories=Game;Emulator;Qt;
+Keywords=adam;coleco;colecovision;fujinet;emulator;
+StartupNotify=true

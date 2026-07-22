@@ -1,0 +1,54 @@
+# Flatpak manifest for the GNOME frontend.
+#
+# The build consumes the LOCAL source tree (type: dir), because three inputs
+# are deliberately not redistributable or not fetchable from inside the
+# sandbox and must exist in the tree before building:
+#   1. core/adamcore-generated/   (./tools/adamcore/stage-adamcore.sh)
+#   2. tools/adamcore/roms/{EOS,OS7,WP}.rom   (your own ROM copies)
+#   3. tools/fujinet/work/out/    (./tools/fujinet/build-fujinet-desktop.sh)
+# The FujiNet shared library's dynamic deps (expat, gnutls, krb5, openssl)
+# are all provided by the GNOME runtime.
+#
+# Build + install + run:
+#   flatpak-builder --user --install --force-clean build-flatpak \
+#       packaging/flatpak/online.fujinet.go.adam.gnome.yml
+#   flatpak run online.fujinet.go.adam.gnome
+#
+# NOTE: written against org.gnome.Platform 48; bump runtime-version (and the
+# SDL tag) to what `flatpak remote-ls flathub --runtime` offers you. This
+# manifest has not been CI-verified yet -- expect to adjust versions.
+
+app-id: online.fujinet.go.adam.gnome
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+command: fujinet-go-adam-gnome
+
+finish-args:
+  - --share=ipc
+  - --share=network          # TNFS hosts + the loopback web UI
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio      # SDL audio (PipeWire's Pulse interface)
+  - --device=all             # gamepad hotplug (hidraw/evdev)
+
+modules:
+  - name: sdl3
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DSDL_STATIC=OFF
+      - -DSDL_TEST_LIBRARY=OFF
+    sources:
+      - type: git
+        url: https://github.com/libsdl-org/SDL.git
+        # Pin the release you validated against (local dev used SDL 3.4).
+        tag: release-3.2.16
+
+  - name: fujinet-go-adam
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DFRONTEND=gnome
+      - -DWITH_WEBVIEW=ON     # webkitgtk-6.0 ships in the GNOME runtime
+    sources:
+      - type: dir
+        path: ../..
