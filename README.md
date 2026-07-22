@@ -1,5 +1,7 @@
 # FujiNet Go Adam — Desktop
 
+[![CI](https://github.com/FujiNetWIFI/fujinet-go-adam-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/FujiNetWIFI/fujinet-go-adam-desktop/actions/workflows/ci.yml)
+
 A self-contained Coleco ADAM (and ColecoVision) with built-in
 [FujiNet](https://fujinet.online/), for users and developers who want the
 whole experience in one app: the `adamcore` emulator, the FujiNet-PC ADAM
@@ -7,16 +9,19 @@ firmware running in-process (joined over AdamNet Bus-over-IP on loopback),
 the FujiNet web configuration UI, and a full native debugger.
 
 The desktop sibling of the Android app
-([fujinet-go-adam](../fujinet-go-adam)). Linux first, with **two native
-frontends** built from one shared core:
+([fujinet-go-adam](https://github.com/FujiNetWIFI/fujinet-go-adam)).
+Every target is a **native frontend** built from one shared core:
 
-| Frontend | Toolkit | Binary |
-|---|---|---|
-| GNOME | GTK4 + libadwaita (+ WebKitGTK) | `fujinet-go-adam-gnome` |
-| KDE | Qt6 Widgets (+ QtWebEngine) | `fujinet-go-adam-kde` |
+| Frontend | Toolkit | Binary | Status |
+|---|---|---|---|
+| GNOME | GTK4 + libadwaita (+ WebKitGTK) | `fujinet-go-adam-gnome` | complete |
+| KDE | Qt6 Widgets (+ QtWebEngine) | `fujinet-go-adam-kde` | complete |
+| macOS | AppKit (+ WKWebView) | `FujiNet Go Adam.app` | app complete; debugger views pending; CI-built, needs testers with Macs |
 
-macOS (AppKit) and Windows frontends are planned against the same core API
-(`core/include/adamsession.h`).
+A native Windows frontend is planned against the same core API
+(`core/include/adamsession.h`). The maintainer develops without a Mac:
+the macOS build is compiled and tested on CI's Apple hardware — reports
+from real Mac users are very welcome.
 
 ## Features
 
@@ -87,6 +92,20 @@ diagnostics), `FUJINET_QUIET_BLOCKS=1` (suppress per-block disk log
 lines), `FUJINET_WEBUI_BIND=addr:port` (web UI bind, default
 `127.0.0.1:65214`), `ADAM_OPEN_DEBUGGER=1`,
 `ADAM_DEBUGGER_TAB=vdp|trace` (debugger start tab).
+
+### macOS
+
+```sh
+brew install cmake ninja sdl3
+git clone https://github.com/tschak909/adamcore.git ~/Workspace/adamcore
+# drop your ROMs into tools/adamcore/roms/ as above
+cmake -B build -G Ninja && cmake --build build
+open "build/frontends/macos/FujiNet Go Adam.app"
+```
+
+(`ADAMCORE_SRC=/path/to/adamcore` overrides the default checkout
+location.) The FujiNet runtime build for macOS (`libfujinet.dylib`) is not
+scripted yet; the app runs without it, minus the FujiNet drive.
 
 ### Flatpak
 

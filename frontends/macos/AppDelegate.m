@@ -11,9 +11,21 @@
 
 #import "AppDelegate.h"
 
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <WebKit/WebKit.h>
 
 #import "DisplayView.h"
+
+static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
+{
+    NSMutableArray<UTType *> *types = [NSMutableArray array];
+    for (NSString *ext in exts) {
+        UTType *t = [UTType typeWithFilenameExtension:ext];
+        if (t)
+            [types addObject:t];
+    }
+    return types;
+}
 
 @implementation AppDelegate {
     adamsession *_session;
@@ -69,7 +81,7 @@
     (void)sender;
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.title = @"Import Disk or Data Pack";
-    panel.allowedFileTypes = @[ @"dsk", @"ddp" ];
+    panel.allowedContentTypes = typesForExtensions(@[ @"dsk", @"ddp" ]);
     if ([panel runModal] != NSModalResponseOK || !panel.URL)
         return;
     char dest[1024];
@@ -83,7 +95,8 @@
     (void)sender;
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.title = @"Load Cartridge";
-    panel.allowedFileTypes = @[ @"rom", @"col", @"bin" ];
+    panel.allowedContentTypes =
+        typesForExtensions(@[ @"rom", @"col", @"bin" ]);
     if ([panel runModal] != NSModalResponseOK || !panel.URL)
         return;
     char dest[1024];

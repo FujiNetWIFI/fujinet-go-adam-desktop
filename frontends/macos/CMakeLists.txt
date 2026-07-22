@@ -21,6 +21,7 @@ target_link_libraries(fujinet-go-adam-macos PRIVATE
   "-framework Cocoa"
   "-framework CoreVideo"
   "-framework QuartzCore"
+  "-framework UniformTypeIdentifiers"
   "-framework WebKit"
 )
 target_compile_options(fujinet-go-adam-macos PRIVATE -Wall -Wextra -fobjc-arc)

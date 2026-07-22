@@ -67,6 +67,11 @@ static CVReturn link_cb(CVDisplayLinkRef link, const CVTimeStamp *now,
     free(_rgba);
 }
 
+/* CVDisplayLink is deprecated in macOS 15 in favor of NSView.displayLink
+ * (macOS 14+), but the retro community runs plenty of older Intel Macs
+ * that never see macOS 14 -- so the older API stays, deliberately. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 - (void)start
 {
     if (_link)
@@ -84,6 +89,7 @@ static CVReturn link_cb(CVDisplayLinkRef link, const CVTimeStamp *now,
         _link = NULL;
     }
 }
+#pragma clang diagnostic pop
 
 - (void)setAspectMode:(int)mode
 {
