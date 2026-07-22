@@ -8,6 +8,8 @@ include(GNUInstallDirs)
 set(ADAMCORE_GEN "${CMAKE_SOURCE_DIR}/core/adamcore-generated")
 
 find_package(SDL3 CONFIG REQUIRED)
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
 
 # ---- embedded ROMs ---------------------------------------------------------
 # Without the (never-redistributed) ROM images, zero-filled placeholders are
@@ -80,7 +82,13 @@ target_compile_definitions(adamsession PRIVATE
   ADAM_INSTALL_DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/fujinet-go-adam"
   ADAM_INSTALL_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/fujinet-go-adam"
 )
-target_link_libraries(adamsession PUBLIC SDL3::SDL3 pthread dl m)
+# pthread everywhere (winpthreads on MinGW); dl/m are POSIX-only. On
+# Windows the FujiNet library is loaded via LoadLibrary (see dynlib.h) and
+# the math functions live in the CRT.
+target_link_libraries(adamsession PUBLIC SDL3::SDL3 Threads::Threads)
+if(NOT WIN32)
+  target_link_libraries(adamsession PUBLIC dl m)
+endif()
 set_property(TARGET adamsession PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # ---- tests -----------------------------------------------------------------

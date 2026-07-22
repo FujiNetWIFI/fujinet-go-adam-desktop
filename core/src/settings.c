@@ -133,6 +133,10 @@ void adamsession_settings_flush(adamsession *s)
         for (kv = s->settings; kv; kv = kv->next)
             fprintf(fp, "%s=%s\n", kv->key, kv->val);
         fclose(fp);
+#if defined(_WIN32)
+        /* Windows rename() will not replace an existing file. */
+        remove(s->settings_file);
+#endif
         rename(tmp, s->settings_file);
         s->settings_dirty = 0;
     }

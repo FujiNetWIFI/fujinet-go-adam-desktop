@@ -21,14 +21,21 @@ include(cmake/StageAdamcore.cmake)
 enable_testing()
 add_subdirectory(core)
 
-if(FRONTEND STREQUAL "gnome" OR FRONTEND STREQUAL "all")
+# Each frontend is native to one platform; with FRONTEND=all (the default)
+# only the host's viable frontends are considered, so a Windows/macOS
+# configure never descends into the Linux (pkg-config) frontends and vice
+# versa. Naming a frontend explicitly still forces just that one.
+if(FRONTEND STREQUAL "gnome" OR (FRONTEND STREQUAL "all" AND UNIX AND NOT APPLE))
   add_subdirectory(frontends/gnome)
 endif()
-if(FRONTEND STREQUAL "kde" OR FRONTEND STREQUAL "all")
+if(FRONTEND STREQUAL "kde" OR (FRONTEND STREQUAL "all" AND UNIX AND NOT APPLE))
   add_subdirectory(frontends/kde)
 endif()
-if(FRONTEND STREQUAL "macos" OR FRONTEND STREQUAL "all")
+if(FRONTEND STREQUAL "macos" OR (FRONTEND STREQUAL "all" AND APPLE))
   add_subdirectory(frontends/macos)
+endif()
+if(FRONTEND STREQUAL "windows" OR (FRONTEND STREQUAL "all" AND WIN32))
+  add_subdirectory(frontends/windows)
 endif()
 
 # Install the FujiNet runtime when it has been built

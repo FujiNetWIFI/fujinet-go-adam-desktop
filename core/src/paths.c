@@ -29,6 +29,25 @@
 #define ADAM_INSTALL_LIBDIR ""
 #endif
 
+/* mkdir differs: POSIX takes a mode, the Windows CRT does not. */
+static int make_dir(const char *path)
+{
+#if defined(_WIN32)
+    return mkdir(path);
+#else
+    return mkdir(path, 0755);
+#endif
+}
+
+static int is_sep(char c)
+{
+#if defined(_WIN32)
+    return c == '/' || c == '\\';
+#else
+    return c == '/';
+#endif
+}
+
 int mkdir_p(const char *path)
 {
     char buf[ADAM_PATH_MAX];
@@ -36,13 +55,14 @@ int mkdir_p(const char *path)
     if (!path || !*path) return -1;
     snprintf(buf, sizeof(buf), "%s", path);
     for (p = buf + 1; *p; p++) {
-        if (*p == '/') {
+        if (is_sep(*p)) {
+            char save = *p;
             *p = '\0';
-            if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
-            *p = '/';
+            if (make_dir(buf) != 0 && errno != EEXIST) return -1;
+            *p = save;
         }
     }
-    if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+    if (make_dir(buf) != 0 && errno != EEXIST) return -1;
     return 0;
 }
 
@@ -109,16 +129,27 @@ static int copy_tree(const char *src, const char *dst)
     return rc;
 }
 
-static void xdg_dir(char *dst, size_t dstsz, const char *env, const char *fallback_suffix)
+/* Per-user config/data directory. On Windows this is %APPDATA% (config)
+ * or %LOCALAPPDATA% (data); elsewhere the XDG variable, then $HOME/suffix. */
+static void default_dir(char *dst, size_t dstsz, const char *xdg_env,
+                        const char *win_env, const char *home_suffix)
 {
-    const char *v = getenv(env);
+#if defined(_WIN32)
+    const char *v = getenv(win_env);
+    (void)xdg_env;
+    (void)home_suffix;
+    snprintf(dst, dstsz, "%s\\fujinet-go-adam", (v && *v) ? v : ".");
+#else
+    const char *v = getenv(xdg_env);
+    (void)win_env;
     if (v && *v) {
         snprintf(dst, dstsz, "%s/fujinet-go-adam", v);
     } else {
         const char *home = getenv("HOME");
         snprintf(dst, dstsz, "%s/%s/fujinet-go-adam", home ? home : ".",
-                 fallback_suffix);
+                 home_suffix);
     }
+#endif
 }
 
 int paths_init(adamsession *s, const adamsession_paths *p)
@@ -126,12 +157,14 @@ int paths_init(adamsession *s, const adamsession_paths *p)
     if (p && p->config_dir && *p->config_dir)
         snprintf(s->config_dir, sizeof(s->config_dir), "%s", p->config_dir);
     else
-        xdg_dir(s->config_dir, sizeof(s->config_dir), "XDG_CONFIG_HOME", ".config");
+        default_dir(s->config_dir, sizeof(s->config_dir), "XDG_CONFIG_HOME",
+                    "APPDATA", ".config");
 
     if (p && p->data_dir && *p->data_dir)
         snprintf(s->data_dir, sizeof(s->data_dir), "%s", p->data_dir);
     else
-        xdg_dir(s->data_dir, sizeof(s->data_dir), "XDG_DATA_HOME", ".local/share");
+        default_dir(s->data_dir, sizeof(s->data_dir), "XDG_DATA_HOME",
+                    "LOCALAPPDATA", ".local/share");
 
     if (mkdir_p(s->config_dir) != 0 || mkdir_p(s->data_dir) != 0)
         return -1;
@@ -175,20 +208,21 @@ int paths_provision_fujinet(adamsession *s)
              s->fujinet_root);
 
     /* Resolve the shared library unless the caller pinned/disabled it.
-     * Both extensions are probed so the macOS build (.dylib) shares this
-     * path layer unchanged. */
+     * Every platform's name is probed so this path layer is shared
+     * unchanged (.so Linux, .dylib macOS, .dll Windows). */
     if (!s->fujinet_lib[0]) {
-        static const char *const names[] = {"libfujinet.so",
-                                            "libfujinet.dylib"};
+        static const char *const names[] = {
+            "libfujinet.so", "libfujinet.dylib", "fujinet.dll"};
         static const char *const dirs[] = {ADAM_INSTALL_LIBDIR,
                                            ADAM_DEV_FUJINET_OUT};
+        const size_t nnames = sizeof(names) / sizeof(names[0]);
         size_t di, ni;
         env = getenv("FUJINET_LIB");
         if (env && is_file(env)) {
             snprintf(s->fujinet_lib, sizeof(s->fujinet_lib), "%s", env);
         } else {
             for (di = 0; di < 2 && !s->fujinet_lib[0]; di++)
-                for (ni = 0; ni < 2 && !s->fujinet_lib[0]; ni++) {
+                for (ni = 0; ni < nnames && !s->fujinet_lib[0]; ni++) {
                     snprintf(probe, sizeof(probe), "%s/%s", dirs[di],
                              names[ni]);
                     if (is_file(probe))

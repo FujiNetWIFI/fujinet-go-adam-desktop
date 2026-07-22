@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "session_internal.h"
+#include "test_tmp.h"
 
 static int failures;
 
@@ -34,8 +35,8 @@ static int wait_for(adamsession *s, uint16_t want, const char *what)
 
 int main(void)
 {
-    char tmpl[] = "/tmp/adampad-test-XXXXXX";
-    char *tmp = mkdtemp(tmpl);
+    char tmpl[512];
+    char *tmp = adam_make_tempdir(tmpl, sizeof(tmpl), "adampad-test-");
     adamsession_paths paths;
     adamsession *s;
     SDL_VirtualJoystickDesc desc;

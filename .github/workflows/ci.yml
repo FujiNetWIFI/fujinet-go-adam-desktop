@@ -120,3 +120,63 @@ jobs:
         with:
           name: FujiNet-Go-Adam-macos
           path: FujiNet-Go-Adam-macos.zip
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tschak909/adamcore
+          path: adamcore-src
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+      # Static SDL3 (as on macOS) so the shipped .exe has no loose DLL
+      # dependencies -- not even SDL3.dll or the MinGW runtime.
+      - name: Build and install static SDL3
+        run: |
+          git clone --depth 1 --branch release-3.2.16 \
+            https://github.com/libsdl-org/SDL.git sdl3-src
+          cmake -S sdl3-src -B sdl3-src/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+            -DSDL_TEST_LIBRARY=OFF \
+            -DCMAKE_INSTALL_PREFIX=/ucrt64
+          cmake --build sdl3-src/build
+          cmake --install sdl3-src/build
+      - name: Configure
+        run: cmake -B build -G Ninja
+        env:
+          ADAMCORE_SRC: ${{ github.workspace }}/adamcore-src
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      # A self-contained GUI exe depends only on system DLLs (kernel32,
+      # user32, gdi32, ...); anything under the MSYS prefix means a runtime
+      # DLL leaked in and the exe would not run on a clean Windows box.
+      - name: Verify the exe is self-contained
+        run: |
+          EXE=build/frontends/windows/fujinet-go-adam-windows.exe
+          test -f "$EXE" || { echo "::error::exe not built"; exit 1; }
+          deps=$(ldd "$EXE" 2>/dev/null || true)
+          echo "$deps"
+          if echo "$deps" | grep -iE "/ucrt64|/mingw|/msys"; then
+            echo "::error::MSYS/MinGW runtime DLL leaked into the exe"
+            exit 1
+          fi
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: FujiNet-Go-Adam-windows
+          path: build/frontends/windows/fujinet-go-adam-windows.exe

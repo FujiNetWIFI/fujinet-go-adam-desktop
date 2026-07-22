@@ -16,12 +16,13 @@ Every target is a **native frontend** built from one shared core:
 |---|---|---|---|
 | GNOME | GTK4 + libadwaita (+ WebKitGTK) | `fujinet-go-adam-gnome` | complete |
 | KDE | Qt6 Widgets (+ QtWebEngine) | `fujinet-go-adam-kde` | complete |
-| macOS | AppKit (+ WKWebView) | `FujiNet Go Adam.app` | app complete; debugger views pending; CI-built, needs testers with Macs |
+| macOS | AppKit (+ WKWebView) | `FujiNet Go Adam.app` | complete (incl. debugger + bundled FujiNet) |
+| Windows | Win32 (GDI + DwmFlush) | `fujinet-go-adam-windows.exe` | app complete; debugger + FujiNet DLL pending; CI-built, needs Windows testers |
 
-A native Windows frontend is planned against the same core API
-(`core/include/adamsession.h`). The maintainer develops without a Mac:
-the macOS build is compiled and tested on CI's Apple hardware — reports
-from real Mac users are very welcome.
+The maintainer develops on Linux without Mac or Windows hardware: those
+builds are compiled and tested on CI's macOS and Windows runners (each
+uploads a ready-to-run artifact), and reports from real users on those
+platforms are very welcome.
 
 ## Features
 
@@ -125,6 +126,25 @@ Or skip building: every CI run uploads a ready-to-run
 `FujiNet-Go-Adam-macos` app-bundle artifact with SDL statically linked
 (no Homebrew needed to run it). It is unsigned: unzip, then
 right-click ▸ Open the first time to get past Gatekeeper.
+
+### Windows
+
+Build in an [MSYS2](https://www.msys2.org/) UCRT64 shell (native Win32
+frontend; SDL3 and the MinGW runtime are linked statically for a
+dependency-free `.exe`):
+
+```sh
+pacman -S --needed git mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,python,SDL3}
+git clone https://github.com/tschak909/adamcore.git ~/Workspace/adamcore
+cmake -B build -G Ninja && cmake --build build
+./build/frontends/windows/fujinet-go-adam-windows.exe
+```
+
+Every CI run also uploads a ready-to-run `FujiNet-Go-Adam-windows`
+artifact. FujiNet itself (the `fujinet.dll` runtime) and the native
+debugger window are not wired up on Windows yet, so the app currently
+boots and runs the machine standalone; the display, input, gamepads,
+media import, and menus are all in place.
 
 (`ADAMCORE_SRC=/path/to/adamcore` overrides the default checkout
 location.) The FujiNet runtime build for macOS (`libfujinet.dylib`) is not

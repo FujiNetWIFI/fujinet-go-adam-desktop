@@ -17,6 +17,7 @@
 #include "adamdebug.h"
 #include "adamsession.h"
 #include "roms_embedded.h"
+#include "test_tmp.h"
 
 static pthread_mutex_t g_mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
@@ -55,8 +56,8 @@ static int wait_stop(int have, int timeout_ms)
 
 int main(void)
 {
-    char tmpl[] = "/tmp/adamdbg-test-XXXXXX";
-    char *tmp = mkdtemp(tmpl);
+    char tmpl[512];
+    char *tmp = adam_make_tempdir(tmpl, sizeof(tmpl), "adamdbg-test-");
     adamsession_paths paths;
     adamsession *s;
     adamdebug *d;

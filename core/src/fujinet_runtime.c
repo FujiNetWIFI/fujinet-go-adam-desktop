@@ -8,12 +8,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include <dlfcn.h>
 #include <limits.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "dynlib.h"
 #include "session_internal.h"
 
 typedef int (*start_runtime_fn)(const char *root, const char *config,
@@ -31,7 +32,7 @@ typedef int (*copy_log_fn)(char *out, int max_bytes);
  * freed code and crashes. A stopped runtime is restarted through the same
  * handle. Same pattern (and reasoning) as the Android wrapper. */
 static pthread_mutex_t g_mtx = PTHREAD_MUTEX_INITIALIZER;
-static void *g_handle;
+static adam_dynlib g_handle;
 static start_runtime_fn g_start;
 static stop_runtime_fn g_stop;
 static last_error_fn g_last_error;
@@ -41,22 +42,27 @@ static copy_log_fn g_copy_log;
 
 static int load_library_locked(adamsession *s)
 {
+    char errbuf[256];
     if (g_handle) return 0;
 
-    g_handle = dlopen(s->fujinet_lib, RTLD_NOW | RTLD_LOCAL);
+    g_handle = adam_dynlib_open(s->fujinet_lib);
     if (!g_handle) {
-        session_set_error(s, "FujiNet library load failed: %s", dlerror());
+        session_set_error(s, "FujiNet library load failed: %s",
+                          adam_dynlib_error(errbuf, sizeof(errbuf)));
         return -1;
     }
-    g_start = (start_runtime_fn)dlsym(g_handle, "fujinet_desktop_start_runtime");
-    g_stop = (stop_runtime_fn)dlsym(g_handle, "fujinet_desktop_stop_runtime");
-    g_last_error =
-        (last_error_fn)dlsym(g_handle, "fujinet_desktop_last_error_message");
-    g_read_audio = (read_audio_fn)dlsym(g_handle, "fujinet_desktop_read_audio");
-    g_clear_audio =
-        (clear_audio_fn)dlsym(g_handle, "fujinet_desktop_clear_audio");
-    g_copy_log =
-        (copy_log_fn)dlsym(g_handle, "fujinet_desktop_copy_recent_log");
+    g_start = (start_runtime_fn)adam_dynlib_sym(
+        g_handle, "fujinet_desktop_start_runtime");
+    g_stop = (stop_runtime_fn)adam_dynlib_sym(
+        g_handle, "fujinet_desktop_stop_runtime");
+    g_last_error = (last_error_fn)adam_dynlib_sym(
+        g_handle, "fujinet_desktop_last_error_message");
+    g_read_audio = (read_audio_fn)adam_dynlib_sym(
+        g_handle, "fujinet_desktop_read_audio");
+    g_clear_audio = (clear_audio_fn)adam_dynlib_sym(
+        g_handle, "fujinet_desktop_clear_audio");
+    g_copy_log = (copy_log_fn)adam_dynlib_sym(
+        g_handle, "fujinet_desktop_copy_recent_log");
 
     if (!g_start || !g_stop || !g_last_error) {
         session_set_error(s, "%s is missing the desktop runtime contract",
