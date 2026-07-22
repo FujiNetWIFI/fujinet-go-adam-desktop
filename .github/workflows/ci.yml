@@ -53,8 +53,12 @@ jobs:
         with:
           repository: tschak909/adamcore
           path: adamcore-src
+      - uses: actions/checkout@v4
+        with:
+          repository: FujiNetWIFI/fujinet-firmware
+          path: fujinet-src
       - name: Install dependencies
-        run: brew install ninja
+        run: brew install ninja mbedtls
       # SDL3 is linked STATICALLY on macOS so the shipped .app has no
       # Homebrew (or any non-system) library dependencies -- a bundle that
       # links /opt/homebrew paths only launches on machines that happen to
@@ -68,6 +72,16 @@ jobs:
             -DSDL_TEST_LIBRARY=OFF
           cmake --build sdl3-src/build
           sudo cmake --install sdl3-src/build
+      # Built BEFORE configure so the frontend's bundle rule sees the
+      # dylib. This is what puts FujiNet inside the shipped Mac app.
+      - name: Build FujiNet runtime (libfujinet.dylib)
+        run: |
+          pip3 install --break-system-packages pyyaml jinja2 \
+            || pip3 install pyyaml jinja2 || true
+          ./tools/fujinet/build-fujinet-desktop.sh
+        env:
+          FUJINET_SRC: ${{ github.workspace }}/fujinet-src
+          MBEDTLS_ROOT_DIR: /opt/homebrew/opt/mbedtls
       - name: Configure
         run: cmake -B build -G Ninja
         env:
@@ -78,12 +92,23 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Verify the bundle is self-contained
         run: |
-          BIN="build/frontends/macos/FujiNet Go Adam.app/Contents/MacOS/FujiNet Go Adam"
-          otool -L "$BIN"
-          if otool -L "$BIN" | grep -E "/opt/homebrew|/usr/local"; then
+          APP="build/frontends/macos/FujiNet Go Adam.app"
+          leaked=0
+          while IFS= read -r -d '' f; do
+            if file "$f" | grep -q "Mach-O"; then
+              echo "--- $f"
+              otool -L "$f"
+              if otool -L "$f" | tail -n +2 | grep -E "/opt/homebrew|/usr/local"; then
+                leaked=1
+              fi
+            fi
+          done < <(find "$APP" -type f -print0)
+          if [ "$leaked" -ne 0 ]; then
             echo "::error::non-system library leaked into the app bundle"
             exit 1
           fi
+          test -f "$APP/Contents/Frameworks/libfujinet.dylib" \
+            || { echo "::error::libfujinet.dylib missing from the bundle"; exit 1; }
       # ditto preserves the executable bits and structure that a plain
       # artifact upload of a .app directory does not.
       - name: Zip app bundle

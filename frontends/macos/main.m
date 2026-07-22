@@ -10,6 +10,7 @@
 #import "AppDelegate.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "adamsession.h"
 
@@ -18,7 +19,25 @@ int main(int argc, const char *argv[])
     (void)argc;
     (void)argv;
     @autoreleasepool {
-        adamsession *session = adamsession_new(NULL);
+        /* A bundled FujiNet runtime (CI packs libfujinet.dylib into
+         * Contents/Frameworks and the pristine runtime tree into
+         * Contents/Resources/fujinet) takes priority; without it the
+         * session falls back to its default search and, failing that,
+         * runs without the FujiNet drive. */
+        adamsession_paths paths;
+        memset(&paths, 0, sizeof(paths));
+        NSString *lib = [[[NSBundle mainBundle] privateFrameworksPath]
+            stringByAppendingPathComponent:@"libfujinet.dylib"];
+        NSString *src = [[[NSBundle mainBundle] resourcePath]
+            stringByAppendingPathComponent:@"fujinet"];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if ([fm fileExistsAtPath:lib])
+            paths.fujinet_lib = lib.UTF8String;
+        if ([fm fileExistsAtPath:
+                    [src stringByAppendingPathComponent:@"fnconfig.ini"]])
+            paths.fujinet_runtime_src = src.UTF8String;
+
+        adamsession *session = adamsession_new(&paths);
         if (!session) {
             fprintf(stderr, "fatal: could not create the session\n");
             return 1;

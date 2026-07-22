@@ -36,12 +36,19 @@ typedef struct adamdebug adamdebug;
  * in the binary at build time, so there is no ROM path to configure.
  *  config_dir: default $XDG_CONFIG_HOME/fujinet-go-adam
  *  data_dir:   default $XDG_DATA_HOME/fujinet-go-adam
- *  fujinet_lib: path to libfujinet.so; default searches $FUJINET_LIB, the
- *              install libdir, then tools/fujinet/work/out. "" disables. */
+ *  fujinet_lib: path to libfujinet.so/.dylib; default searches
+ *              $FUJINET_LIB, the install libdir, then
+ *              tools/fujinet/work/out. "" disables.
+ *  fujinet_runtime_src: directory holding the pristine fnconfig.ini +
+ *              data/ + SD/ used to provision the user's runtime tree on
+ *              first start (a macOS app passes its bundle's
+ *              Resources/fujinet here); default searches the install
+ *              share dir, then tools/fujinet/work/out. */
 typedef struct {
     const char *config_dir;
     const char *data_dir;
     const char *fujinet_lib;
+    const char *fujinet_runtime_src;
 } adamsession_paths;
 
 /* Creates the session, provisions the config/data directories, and loads the

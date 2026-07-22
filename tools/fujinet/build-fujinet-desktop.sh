@@ -33,6 +33,14 @@ OUT_DIR="${WORK_ROOT}/out"
 FUJINET_SRC="${FUJINET_SRC:-${HOME}/Workspace/fujinet-pc-adam}"
 PC_TARGET="ADAM"
 
+# The shared library's name follows the host platform (the same script
+# builds libfujinet.dylib on macOS, e.g. in the CI job that assembles the
+# Mac app bundle).
+case "$(uname -s)" in
+    Darwin) LIBNAME="libfujinet.dylib" ;;
+    *)      LIBNAME="libfujinet.so" ;;
+esac
+
 fail() {
     echo "build-fujinet-desktop.sh: $*" >&2
     exit 1
@@ -111,10 +119,13 @@ patch("build.sh", [
 ])
 
 # --- fujinet_pc.cmake: SHARED target with the desktop entry wrapper -------
-# The version script exports only the fujinet_* entry points and makes every
-# other symbol local/non-preemptible -- required both for a clean dlsym
-# surface and because the system's static mbedtls is built without -fPIC
-# (its PC32 relocations only link when the referenced symbols are local).
+# Export control per linker: on Linux a version script exports only the
+# fujinet_* entry points and makes every other symbol local/non-preemptible
+# (required both for a clean dlsym surface and because the system's static
+# mbedtls is built without -fPIC: its PC32 relocations only link when the
+# referenced symbols are local). On macOS the equivalent is an
+# -exported_symbols_list (Mach-O is always PIC, so only the API surface
+# matters there).
 patch("fujinet_pc.cmake", [
     (
         'add_executable(fujinet ${SOURCES})\n',
@@ -122,8 +133,13 @@ patch("fujinet_pc.cmake", [
         '    add_library(fujinet SHARED ${SOURCES} desktop/fujinet_desktop_entry.cpp)\n'
         '    set_target_properties(fujinet PROPERTIES OUTPUT_NAME "fujinet")\n'
         '    target_compile_definitions(fujinet PRIVATE FUJINET_EMBEDDED=1)\n'
-        '    target_link_options(fujinet PRIVATE\n'
-        '        "-Wl,--version-script=${CMAKE_SOURCE_DIR}/desktop/fujinet_embedded.map")\n'
+        '    if(APPLE)\n'
+        '        target_link_options(fujinet PRIVATE\n'
+        '            "-Wl,-exported_symbols_list,${CMAKE_SOURCE_DIR}/desktop/fujinet_embedded.exp")\n'
+        '    else()\n'
+        '        target_link_options(fujinet PRIVATE\n'
+        '            "-Wl,--version-script=${CMAKE_SOURCE_DIR}/desktop/fujinet_embedded.map")\n'
+        '    endif()\n'
         'else()\n'
         '    add_executable(fujinet ${SOURCES})\n'
         'endif()\n',
@@ -221,7 +237,11 @@ patch("lib/compat/pc_rtos/pc_rtos.cpp", [
         '            char tn[16];\n'
         '            strncpy(tn, name, sizeof(tn) - 1);\n'
         '            tn[sizeof(tn) - 1] = 0;\n'
+        '#if defined(__APPLE__)\n'
+        '            pthread_setname_np(tn);\n'
+        '#else\n'
         '            pthread_setname_np(pthread_self(), tn);\n'
+        '#endif\n'
         '        }\n'
         '        fn(arg);\n'
         '    });\n'
@@ -267,6 +287,11 @@ desktop_dir.mkdir(exist_ok=True)
     "  local: *;\n"
     "};\n"
 )
+# macOS equivalent (C symbols carry a leading underscore in Mach-O).
+(desktop_dir / "fujinet_embedded.exp").write_text(
+    "_fujinet_desktop_*\n"
+    "_fujinet_android_*\n"
+)
 PY
 }
 
@@ -298,14 +323,14 @@ PY
 
 collect_outputs() {
     local dist_dir="${CLONE_DIR}/build/dist"
-    [[ -f "${dist_dir}/libfujinet.so" ]] || fail "Expected shared library at ${dist_dir}/libfujinet.so"
+    [[ -f "${dist_dir}/${LIBNAME}" ]] || fail "Expected shared library at ${dist_dir}/${LIBNAME}"
     [[ -d "${dist_dir}/data" ]] || fail "Expected FujiNet data directory at ${dist_dir}/data"
     [[ -d "${dist_dir}/SD" ]] || fail "Expected FujiNet SD directory at ${dist_dir}/SD"
     [[ -f "${dist_dir}/fnconfig.ini" ]] || fail "Expected FujiNet config at ${dist_dir}/fnconfig.ini"
 
     rm -rf "${OUT_DIR}"
     mkdir -p "${OUT_DIR}"
-    cp "${dist_dir}/libfujinet.so" "${OUT_DIR}/libfujinet.so"
+    cp "${dist_dir}/${LIBNAME}" "${OUT_DIR}/${LIBNAME}"
     cp -R "${dist_dir}/data" "${OUT_DIR}/data"
     cp -R "${dist_dir}/SD" "${OUT_DIR}/SD"
     cp "${dist_dir}/fnconfig.ini" "${OUT_DIR}/fnconfig.ini"
@@ -333,5 +358,5 @@ fi
 collect_outputs
 
 echo "FujiNet ADAM desktop runtime outputs:"
-echo "  ${OUT_DIR}/libfujinet.so"
+echo "  ${OUT_DIR}/${LIBNAME}"
 echo "  ${OUT_DIR}/{fnconfig.ini,data,SD}"

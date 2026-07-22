@@ -146,6 +146,12 @@ int paths_init(adamsession *s, const adamsession_paths *p)
     else
         s->fujinet_lib[0] = '\0'; /* resolved in paths_provision_fujinet */
 
+    if (p && p->fujinet_runtime_src && *p->fujinet_runtime_src)
+        snprintf(s->fujinet_src, sizeof(s->fujinet_src), "%s",
+                 p->fujinet_runtime_src);
+    else
+        s->fujinet_src[0] = '\0';
+
     snprintf(s->webui_url, sizeof(s->webui_url), "http://127.0.0.1:%d/",
              ADAMSESSION_WEBUI_PORT);
     return 0;
@@ -197,12 +203,20 @@ int paths_provision_fujinet(adamsession *s)
     /* Provision the runtime tree once (keep user data on later runs). */
     if (!is_file(s->fujinet_config)) {
         src_root[0] = '\0';
-        snprintf(probe, sizeof(probe), "%s/fujinet/fnconfig.ini",
-                 ADAM_INSTALL_DATADIR);
-        if (is_file(probe)) {
-            snprintf(src_root, sizeof(src_root), "%s/fujinet",
+        if (s->fujinet_src[0]) {
+            snprintf(probe, sizeof(probe), "%s/fnconfig.ini",
+                     s->fujinet_src);
+            if (is_file(probe))
+                snprintf(src_root, sizeof(src_root), "%s", s->fujinet_src);
+        }
+        if (!src_root[0]) {
+            snprintf(probe, sizeof(probe), "%s/fujinet/fnconfig.ini",
                      ADAM_INSTALL_DATADIR);
-        } else {
+            if (is_file(probe))
+                snprintf(src_root, sizeof(src_root), "%s/fujinet",
+                         ADAM_INSTALL_DATADIR);
+        }
+        if (!src_root[0]) {
             snprintf(probe, sizeof(probe), "%s/fnconfig.ini",
                      ADAM_DEV_FUJINET_OUT);
             if (is_file(probe))

@@ -31,6 +31,7 @@ struct adamsession {
     char cart_dir[ADAM_PATH_MAX];
     char settings_file[ADAM_PATH_MAX];
     char fujinet_lib[ADAM_PATH_MAX];  /* "" = unavailable/disabled */
+    char fujinet_src[ADAM_PATH_MAX];  /* provisioning source override */
     char fujinet_root[ADAM_PATH_MAX];
     char fujinet_config[ADAM_PATH_MAX];
     char fujinet_sd[ADAM_PATH_MAX];

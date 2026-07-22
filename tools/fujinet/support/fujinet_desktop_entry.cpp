@@ -38,6 +38,14 @@ extern void fn_service_loop(void* param);
 extern void main_shutdown_handler();
 
 namespace {
+void set_thread_name(const char* name) {
+#if defined(__APPLE__)
+    pthread_setname_np(name);
+#else
+    pthread_setname_np(pthread_self(), name);
+#endif
+}
+
 std::mutex g_mutex;
 std::condition_variable g_setup_condition;
 std::thread g_runtime_thread;
@@ -327,7 +335,7 @@ void start_log_capture(const std::string& runtime_root) {
     setvbuf(stderr, nullptr, _IONBF, 0);
 
     std::thread log_thread([read_fd = log_pipe[0]]() {
-        pthread_setname_np(pthread_self(), "fujinet-log");
+        set_thread_name("fujinet-log");
         char buffer[1024];
         std::string pending_line;
 
@@ -524,7 +532,7 @@ extern "C" bool fujinet_desktop_start_runtime(
 
     try {
         g_runtime_thread = std::thread([runtimeRoot, config, sd, webui_bind]() {
-            pthread_setname_np(pthread_self(), "fujinet-svc");
+            set_thread_name("fujinet-svc");
             start_log_capture(runtimeRoot);
             if (chdir(runtimeRoot.c_str()) != 0) {
                 std::lock_guard<std::mutex> lock(g_mutex);

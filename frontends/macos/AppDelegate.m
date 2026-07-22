@@ -15,6 +15,9 @@
 #import <WebKit/WebKit.h>
 
 #import "DisplayView.h"
+#import "debugger/DebuggerWindow.h"
+
+#include <stdlib.h>
 
 static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 {
@@ -201,12 +204,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 - (void)showDebugger:(id)sender
 {
     (void)sender;
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"Debugger";
-    alert.informativeText = @"The native macOS debugger views are still in "
-                            @"progress; use the GNOME or KDE frontend for "
-                            @"debugging today.";
-    [alert runModal];
+    [DebuggerWindow showForSession:_session];
 }
 
 /* ---- menus ---------------------------------------------------------------- */
@@ -279,9 +277,12 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
                               keyEquivalent:@"f"];
     fs.keyEquivalentModifierMask =
         NSEventModifierFlagControl | NSEventModifierFlagCommand;
-    [view addItem:[self item:@"Debugger"
-                      action:@selector(showDebugger:)
-                         key:@""]];
+    NSMenuItem *dbg = [self item:@"Debugger"
+                          action:@selector(showDebugger:)
+                             key:[NSString stringWithFormat:@"%C",
+                                           (unichar)NSF12FunctionKey]];
+    dbg.keyEquivalentModifierMask = 0;
+    [view addItem:dbg];
     viewItem.submenu = view;
     [menubar addItem:viewItem];
 
@@ -318,6 +319,10 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     [_window makeKeyAndOrderFront:nil];
     [_window makeFirstResponder:_display];
     [_display start];
+
+    /* Developer affordance shared with the other frontends. */
+    if (getenv("ADAM_OPEN_DEBUGGER"))
+        [DebuggerWindow showForSession:_session];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)note
