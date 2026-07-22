@@ -168,23 +168,27 @@ int paths_provision_fujinet(adamsession *s)
     snprintf(s->fujinet_data, sizeof(s->fujinet_data), "%s/data",
              s->fujinet_root);
 
-    /* Resolve the shared library unless the caller pinned/disabled it. */
+    /* Resolve the shared library unless the caller pinned/disabled it.
+     * Both extensions are probed so the macOS build (.dylib) shares this
+     * path layer unchanged. */
     if (!s->fujinet_lib[0]) {
+        static const char *const names[] = {"libfujinet.so",
+                                            "libfujinet.dylib"};
+        static const char *const dirs[] = {ADAM_INSTALL_LIBDIR,
+                                           ADAM_DEV_FUJINET_OUT};
+        size_t di, ni;
         env = getenv("FUJINET_LIB");
         if (env && is_file(env)) {
             snprintf(s->fujinet_lib, sizeof(s->fujinet_lib), "%s", env);
         } else {
-            snprintf(probe, sizeof(probe), "%s/libfujinet.so",
-                     ADAM_INSTALL_LIBDIR);
-            if (is_file(probe)) {
-                snprintf(s->fujinet_lib, sizeof(s->fujinet_lib), "%s", probe);
-            } else {
-                snprintf(probe, sizeof(probe), "%s/libfujinet.so",
-                         ADAM_DEV_FUJINET_OUT);
-                if (is_file(probe))
-                    snprintf(s->fujinet_lib, sizeof(s->fujinet_lib), "%s",
-                             probe);
-            }
+            for (di = 0; di < 2 && !s->fujinet_lib[0]; di++)
+                for (ni = 0; ni < 2 && !s->fujinet_lib[0]; ni++) {
+                    snprintf(probe, sizeof(probe), "%s/%s", dirs[di],
+                             names[ni]);
+                    if (is_file(probe))
+                        snprintf(s->fujinet_lib, sizeof(s->fujinet_lib),
+                                 "%s", probe);
+                }
         }
     }
     if (!s->fujinet_lib[0])

@@ -1,0 +1,73 @@
+# Builds the shared core and every frontend the runner's platform supports,
+# then runs the test suite. adamcore is cloned from its own repository and
+# staged via ADAMCORE_SRC. No system ROMs exist in CI, so the build embeds
+# zero-filled placeholders and the boot-dependent tests skip themselves;
+# the hardware-independent suites (input encoding, disassembler goldens,
+# VDP decoding, virtual-gamepad mapping) run everywhere.
+#
+# The macOS job is the substitute for owning a Mac: it proves the core,
+# the compat shims, and the AppKit frontend build and pass tests on real
+# Apple hardware.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tschak909/adamcore
+          path: adamcore-src
+      - name: Install toolkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtk-4-dev libadwaita-1-dev \
+            libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev
+      - name: Build and install SDL3
+        run: |
+          git clone --depth 1 --branch release-3.2.16 \
+            https://github.com/libsdl-org/SDL.git sdl3-src
+          cmake -S sdl3-src -B sdl3-src/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
+          cmake --build sdl3-src/build
+          sudo cmake --install sdl3-src/build
+      - name: Configure
+        run: cmake -B build -G Ninja
+        env:
+          ADAMCORE_SRC: ${{ github.workspace }}/adamcore-src
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tschak909/adamcore
+          path: adamcore-src
+      - name: Install dependencies
+        run: brew install ninja sdl3
+      - name: Configure
+        run: cmake -B build -G Ninja
+        env:
+          ADAMCORE_SRC: ${{ github.workspace }}/adamcore-src
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: FujiNet-Go-Adam-macos-no-roms
+          path: "build/frontends/macos/*.app"
+          if-no-files-found: warn

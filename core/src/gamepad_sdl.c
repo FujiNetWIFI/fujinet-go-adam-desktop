@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "compat.h"
 #include "session_internal.h"
 
 #define MAX_PADS 4
@@ -111,7 +112,7 @@ static void *gamepad_thread_main(void *arg)
     gamepad_state *g = s->gamepad;
     int tick = 0;
 
-    pthread_setname_np(pthread_self(), "adam-gamepad");
+    adam_thread_setname("adam-gamepad");
     while (g->run) {
         int i;
         SDL_UpdateGamepads();

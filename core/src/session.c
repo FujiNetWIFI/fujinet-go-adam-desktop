@@ -19,6 +19,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "compat.h"
 #include "roms_embedded.h"
 #include "session_internal.h"
 
@@ -42,15 +43,8 @@ static long read_timer_us(void)
     return (long)(ts.tv_sec * 1000000L + ts.tv_nsec / 1000L);
 }
 
-/* Sleep (don't spin) until an absolute CLOCK_MONOTONIC time in microseconds. */
-static void sleep_until_us(long target_us)
-{
-    struct timespec ts;
-    ts.tv_sec = target_us / 1000000L;
-    ts.tv_nsec = (target_us % 1000000L) * 1000L;
-    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR)
-        ;
-}
+/* Absolute-deadline sleeping and monotonic condvars live in compat.h so
+ * the same code paces correctly on Linux and macOS. */
 
 /****************************************************************************/
 /** Vsync phase-lock (ticks fed by the frontends)                          **/
@@ -88,14 +82,8 @@ static long wait_next_vsync(adamsession *s)
     long v;
     pthread_mutex_lock(&s->vs_mtx);
     while (!s->stop_flag && s->vs_ns <= s->vs_seen_ns) {
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        ts.tv_nsec += 40000000L; /* 40ms safety timeout */
-        if (ts.tv_nsec >= 1000000000L) {
-            ts.tv_sec++;
-            ts.tv_nsec -= 1000000000L;
-        }
-        if (pthread_cond_timedwait(&s->vs_cv, &s->vs_mtx, &ts) == ETIMEDOUT)
+        /* 40ms safety timeout so this can never hang if the ticks stop. */
+        if (adam_cond_timedwait_ms(&s->vs_cv, &s->vs_mtx, 40) == ETIMEDOUT)
             break;
     }
     s->vs_seen_ns = s->vs_ns;
@@ -141,7 +129,7 @@ static void *emu_thread_main(void *arg)
     long next_us;
     const int pace_log = getenv("ADAM_PACE_LOG") != NULL;
 
-    pthread_setname_np(pthread_self(), "adam-emu");
+    adam_thread_setname("adam-emu");
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.os7_rom_data = adam_rom_os7;
@@ -214,7 +202,7 @@ static void *emu_thread_main(void *arg)
                  * time rather than a stale schedule. */
                 next_us = wait_next_vsync(s);
             } else if (now < next_us) {
-                sleep_until_us(next_us);
+                adam_sleep_until_us(next_us);
             } else {
                 next_us = now; /* behind: don't accumulate debt */
             }
@@ -234,7 +222,6 @@ static void *emu_thread_main(void *arg)
 adamsession *adamsession_new(const adamsession_paths *paths)
 {
     adamsession *s = calloc(1, sizeof(*s));
-    pthread_condattr_t ca;
     if (!s) return NULL;
 
     if (paths_init(s, paths) != 0) {
@@ -245,10 +232,7 @@ adamsession *adamsession_new(const adamsession_paths *paths)
     pthread_mutex_init(&s->lifecycle_mtx, NULL);
     pthread_mutex_init(&s->frame_mtx, NULL);
     pthread_mutex_init(&s->vs_mtx, NULL);
-    pthread_condattr_init(&ca);
-    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
-    pthread_cond_init(&s->vs_cv, &ca);
-    pthread_condattr_destroy(&ca);
+    adam_cond_init_monotonic(&s->vs_cv);
 
     settings_init(s);
     return s;
@@ -294,6 +278,10 @@ int adamsession_start(adamsession *s, const adamsession_start_opts *opts)
     s->cart_path[0] = '\0';
     if (opts->cart_path && opts->cart_path[0])
         snprintf(s->cart_path, sizeof(s->cart_path), "%s", opts->cart_path);
+
+    if (adam_roms_placeholder)
+        fprintf(stderr, "adamsession: built without real system ROMs; the "
+                        "machine will not boot anything\n");
 
     /* FujiNet first; its BoIP client retries connecting to the core's
      * listener, so ordering is forgiving. A missing runtime is not fatal:

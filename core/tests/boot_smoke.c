@@ -33,6 +33,11 @@ int main(void)
     uint16_t seen[16];
     int nseen = 0;
 
+    if (adam_roms_placeholder) {
+        fprintf(stderr, "boot_smoke: built without real ROMs; skipping\n");
+        return 77;
+    }
+
     memset(&cfg, 0, sizeof(cfg));
     cfg.os7_rom_data = adam_rom_os7;
     cfg.eos_rom_data = adam_rom_eos;

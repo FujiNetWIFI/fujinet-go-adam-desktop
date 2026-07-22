@@ -10,17 +10,33 @@ set(ADAMCORE_GEN "${CMAKE_SOURCE_DIR}/core/adamcore-generated")
 find_package(SDL3 CONFIG REQUIRED)
 
 # ---- embedded ROMs ---------------------------------------------------------
+# Without the (never-redistributed) ROM images, zero-filled placeholders are
+# embedded instead so CI and ROM-less checkouts still build; boot-dependent
+# tests skip themselves in that configuration.
 set(ROM_DIR "${CMAKE_SOURCE_DIR}/tools/adamcore/roms")
 set(ROMS_EMBEDDED_C "${CMAKE_CURRENT_BINARY_DIR}/roms_embedded.c")
-add_custom_command(
-  OUTPUT "${ROMS_EMBEDDED_C}"
-  COMMAND python3 "${CMAKE_SOURCE_DIR}/tools/adamcore/embed-roms.py"
-          "${ROMS_EMBEDDED_C}"
-          "${ROM_DIR}/OS7.rom" "${ROM_DIR}/EOS.rom" "${ROM_DIR}/WP.rom"
-  DEPENDS "${CMAKE_SOURCE_DIR}/tools/adamcore/embed-roms.py"
-          "${ROM_DIR}/OS7.rom" "${ROM_DIR}/EOS.rom" "${ROM_DIR}/WP.rom"
-  COMMENT "Embedding ADAM system ROMs"
-)
+if(EXISTS "${ROM_DIR}/OS7.rom" AND EXISTS "${ROM_DIR}/EOS.rom"
+   AND EXISTS "${ROM_DIR}/WP.rom")
+  add_custom_command(
+    OUTPUT "${ROMS_EMBEDDED_C}"
+    COMMAND python3 "${CMAKE_SOURCE_DIR}/tools/adamcore/embed-roms.py"
+            "${ROMS_EMBEDDED_C}"
+            "${ROM_DIR}/OS7.rom" "${ROM_DIR}/EOS.rom" "${ROM_DIR}/WP.rom"
+    DEPENDS "${CMAKE_SOURCE_DIR}/tools/adamcore/embed-roms.py"
+            "${ROM_DIR}/OS7.rom" "${ROM_DIR}/EOS.rom" "${ROM_DIR}/WP.rom"
+    COMMENT "Embedding ADAM system ROMs"
+  )
+else()
+  message(WARNING "No system ROMs in ${ROM_DIR}; embedding zero-filled "
+                  "placeholders (the machine will not boot)")
+  add_custom_command(
+    OUTPUT "${ROMS_EMBEDDED_C}"
+    COMMAND python3 "${CMAKE_SOURCE_DIR}/tools/adamcore/embed-roms.py"
+            --placeholder "${ROMS_EMBEDDED_C}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/tools/adamcore/embed-roms.py"
+    COMMENT "Embedding placeholder ROMs (none found)"
+  )
+endif()
 
 add_library(adamsession STATIC
   # staged adamcore
@@ -99,5 +115,6 @@ add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME debug_boot COMMAND debug_boot_test)
 add_test(NAME gamepad_map COMMAND gamepad_map_test)
-set_tests_properties(gamepad_map PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME vdp_decode COMMAND vdp_decode_test)
+set_tests_properties(boot_smoke debug_boot gamepad_map
+                     PROPERTIES SKIP_RETURN_CODE 77)

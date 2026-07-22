@@ -17,4 +17,9 @@ extern const uint8_t adam_rom_os7[ADAMCORE_OS7_ROM_SIZE];
 extern const uint8_t adam_rom_eos[ADAMCORE_EOS_ROM_SIZE];
 extern const uint8_t adam_rom_wp[ADAMCORE_WP_ROM_SIZE];
 
+/* 1 when built without real ROM images (zero-filled placeholders for CI /
+ * ROM-less checkouts): the machine cannot boot, and boot-dependent tests
+ * skip themselves. */
+extern const int adam_roms_placeholder;
+
 #endif /* ROMS_EMBEDDED_H */

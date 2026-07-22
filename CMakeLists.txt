@@ -27,6 +27,9 @@ endif()
 if(FRONTEND STREQUAL "kde" OR FRONTEND STREQUAL "all")
   add_subdirectory(frontends/kde)
 endif()
+if(FRONTEND STREQUAL "macos" OR FRONTEND STREQUAL "all")
+  add_subdirectory(frontends/macos)
+endif()
 
 # Install the FujiNet runtime when it has been built
 # (tools/fujinet/build-fujinet-desktop.sh); the session provisions the

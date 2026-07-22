@@ -16,6 +16,7 @@
 
 #include "adamdebug.h"
 #include "adamsession.h"
+#include "roms_embedded.h"
 
 static pthread_mutex_t g_mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
@@ -64,6 +65,10 @@ int main(void)
     int have;
 
     if (!tmp) return 1;
+    if (adam_roms_placeholder) {
+        fprintf(stderr, "debug_boot: built without real ROMs; skipping\n");
+        return 77;
+    }
     memset(&paths, 0, sizeof(paths));
     paths.config_dir = tmp;
     paths.data_dir = tmp;
