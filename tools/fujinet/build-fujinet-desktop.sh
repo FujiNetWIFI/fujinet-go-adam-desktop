@@ -144,6 +144,11 @@ patch("build.sh", [
         '    # script (local: *) to the shared library link, which would hide the\n'
         '    # fujinet_desktop_* entry points from dlsym.\n'
         '    CMAKE_EXTRA_ARGS+=("-DFUJINET_EMBEDDED=ON" "-DCMAKE_POSITION_INDEPENDENT_CODE=ON" "-DWITH_SYMBOL_VERSIONING=OFF")\n'
+        '    if [ "$(uname -s)" = "Darwin" ] ; then\n'
+        '      # Static libcrypto keeps the shipped dylib free of Homebrew\n'
+        '      # paths; Linux stays on the system OpenSSL shared library.\n'
+        '      CMAKE_EXTRA_ARGS+=("-DOPENSSL_USE_STATIC_LIBS=ON")\n'
+        '    fi\n'
         '  fi\n'
         '  GEN_CMD=""\n',
     ),
