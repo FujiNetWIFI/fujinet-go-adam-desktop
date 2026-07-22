@@ -102,7 +102,9 @@ open "build/frontends/macos/FujiNet Go Adam.app"
 ```
 
 Or skip building: every CI run uploads a ready-to-run
-`FujiNet-Go-Adam-macos` app-bundle artifact.
+`FujiNet-Go-Adam-macos` app-bundle artifact with SDL statically linked
+(no Homebrew needed to run it). It is unsigned: unzip, then
+right-click ▸ Open the first time to get past Gatekeeper.
 
 (`ADAMCORE_SRC=/path/to/adamcore` overrides the default checkout
 location.) The FujiNet runtime build for macOS (`libfujinet.dylib`) is not

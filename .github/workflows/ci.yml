@@ -54,7 +54,20 @@ jobs:
           repository: tschak909/adamcore
           path: adamcore-src
       - name: Install dependencies
-        run: brew install ninja sdl3
+        run: brew install ninja
+      # SDL3 is linked STATICALLY on macOS so the shipped .app has no
+      # Homebrew (or any non-system) library dependencies -- a bundle that
+      # links /opt/homebrew paths only launches on machines that happen to
+      # have Homebrew's sdl3 installed.
+      - name: Build and install static SDL3
+        run: |
+          git clone --depth 1 --branch release-3.2.16 \
+            https://github.com/libsdl-org/SDL.git sdl3-src
+          cmake -S sdl3-src -B sdl3-src/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+            -DSDL_TEST_LIBRARY=OFF
+          cmake --build sdl3-src/build
+          sudo cmake --install sdl3-src/build
       - name: Configure
         run: cmake -B build -G Ninja
         env:
@@ -63,9 +76,23 @@ jobs:
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Verify the bundle is self-contained
+        run: |
+          BIN="build/frontends/macos/FujiNet Go Adam.app/Contents/MacOS/FujiNet Go Adam"
+          otool -L "$BIN"
+          if otool -L "$BIN" | grep -E "/opt/homebrew|/usr/local"; then
+            echo "::error::non-system library leaked into the app bundle"
+            exit 1
+          fi
+      # ditto preserves the executable bits and structure that a plain
+      # artifact upload of a .app directory does not.
+      - name: Zip app bundle
+        run: |
+          ditto -c -k --keepParent \
+            "build/frontends/macos/FujiNet Go Adam.app" \
+            FujiNet-Go-Adam-macos.zip
       - name: Upload app bundle
         uses: actions/upload-artifact@v4
         with:
           name: FujiNet-Go-Adam-macos
-          path: "build/frontends/macos/*.app"
-          if-no-files-found: warn
+          path: FujiNet-Go-Adam-macos.zip
