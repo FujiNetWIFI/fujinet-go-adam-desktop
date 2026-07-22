@@ -1,7 +1,7 @@
 /*
  * ADAM system ROM images embedded in the binary (generated at build time by
- * tools/adamcore/embed-roms.py from the ROM files in tools/adamcore/roms,
- * which are not part of the repository -- see COMPLIANCE.md).
+ * tools/adamcore/embed-roms.py from the bundled, public-domain ROM files in
+ * tools/adamcore/roms -- see COMPLIANCE.md).
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

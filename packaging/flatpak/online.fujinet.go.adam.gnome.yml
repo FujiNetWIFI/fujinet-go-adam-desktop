@@ -1,11 +1,10 @@
 # Flatpak manifest for the GNOME frontend.
 #
-# The build consumes the LOCAL source tree (type: dir), because three inputs
-# are deliberately not redistributable or not fetchable from inside the
-# sandbox and must exist in the tree before building:
+# The build consumes the LOCAL source tree (type: dir), because two inputs
+# are not fetchable from inside the sandbox and must exist in the tree
+# before building:
 #   1. core/adamcore-generated/   (./tools/adamcore/stage-adamcore.sh)
-#   2. tools/adamcore/roms/{EOS,OS7,WP}.rom   (your own ROM copies)
-#   3. tools/fujinet/work/out/    (./tools/fujinet/build-fujinet-desktop.sh)
+#   2. tools/fujinet/work/out/    (./tools/fujinet/build-fujinet-desktop.sh)
 # The FujiNet shared library's dynamic deps (expat, gnutls, krb5, openssl)
 # are all provided by the GNOME runtime.
 #

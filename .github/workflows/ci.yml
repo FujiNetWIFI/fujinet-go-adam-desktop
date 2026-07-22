@@ -1,13 +1,11 @@
 # Builds the shared core and every frontend the runner's platform supports,
-# then runs the test suite. adamcore is cloned from its own repository and
-# staged via ADAMCORE_SRC. No system ROMs exist in CI, so the build embeds
-# zero-filled placeholders and the boot-dependent tests skip themselves;
-# the hardware-independent suites (input encoding, disassembler goldens,
-# VDP decoding, virtual-gamepad mapping) run everywhere.
+# then runs the test suite -- including the real boot tests, since the
+# public-domain system ROMs are bundled in the repository. adamcore is
+# cloned from its own repository and staged via ADAMCORE_SRC.
 #
 # The macOS job is the substitute for owning a Mac: it proves the core,
 # the compat shims, and the AppKit frontend build and pass tests on real
-# Apple hardware.
+# Apple hardware, and uploads a ready-to-run app bundle.
 
 name: CI
 
@@ -68,6 +66,6 @@ jobs:
       - name: Upload app bundle
         uses: actions/upload-artifact@v4
         with:
-          name: FujiNet-Go-Adam-macos-no-roms
+          name: FujiNet-Go-Adam-macos
           path: "build/frontends/macos/*.app"
           if-no-files-found: warn

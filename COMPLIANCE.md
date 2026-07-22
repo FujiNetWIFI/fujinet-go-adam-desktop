@@ -25,12 +25,12 @@ component it builds from is GPLv3-compatible:
 
 ## System ROMs
 
-The Coleco ADAM system ROMs (`EOS.rom`, `OS7.rom`, `WP.rom`) are
-copyrighted by Coleco and are **not part of this repository**
-(`tools/adamcore/roms/` is git-ignored). Builders supply their own copies;
-`tools/adamcore/embed-roms.py` embeds them into locally built binaries at
-build time. Do not distribute binaries containing the ROMs unless you have
-the right to distribute the ROMs themselves.
+The ADAM system ROM images (`EOS.rom`, `OS7.rom`, `WP.rom`, 1983-84) are
+bundled in `tools/adamcore/roms/` and embedded into the binaries at build
+time, per the project maintainer's determination that these images have
+lapsed into the public domain. They carry no GPL license; if your
+jurisdiction or diligence reaches a different conclusion, delete the
+images and the build embeds inert zero-filled placeholders instead.
 
 ## Debug symbols
 

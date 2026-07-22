@@ -4,9 +4,8 @@
 #
 # Sources come from a git checkout of the adamcore repository, pinned by
 # SOURCE_COMMIT (override the location with ADAMCORE_SRC=/path). The staged
-# tree is git-ignored. System ROMs are NOT staged here: the apps load them at
-# runtime from $XDG_DATA_HOME/fujinet-go-adam/roms (dev fallback:
-# tools/adamcore/roms, which is git-ignored too).
+# tree is git-ignored. The system ROMs live in tools/adamcore/roms and are
+# embedded into the binaries by the build (tools/adamcore/embed-roms.py).
 set -euo pipefail
 
 SOURCE_BRANCH="main"

@@ -4,13 +4,13 @@
 Usage: embed-roms.py <out.c> <OS7.rom> <EOS.rom> <WP.rom>
        embed-roms.py --placeholder <out.c>
 
-The ROM images are Coleco-copyrighted and are NOT committed to this
-repository (tools/adamcore/roms is git-ignored); drop your own copies there
-before building. The generated C file lives in the build tree only.
+The ROM images are bundled in tools/adamcore/roms (public domain; see
+COMPLIANCE.md). The generated C file lives in the build tree only.
 
 --placeholder emits zero-filled arrays with adam_roms_placeholder = 1 so
-CI and ROM-less checkouts still compile and run the hardware-independent
-tests; the machine cannot boot anything real from them.
+a checkout with the images deleted still compiles and runs the
+hardware-independent tests; the machine cannot boot anything real from
+them.
 """
 
 import sys

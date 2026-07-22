@@ -64,9 +64,8 @@ Widgets/OpenGLWidgets (+ WebEngine, optional). Frontends are
 found-or-skipped; `-DFRONTEND=gnome|kde|all` selects explicitly and
 `-DWITH_WEBVIEW=OFF` swaps the embedded web UI for the system browser.
 
-1. **System ROMs** (not redistributed; see COMPLIANCE.md): drop your
-   `EOS.rom`, `OS7.rom`, `WP.rom` into `tools/adamcore/roms/`. They are
-   embedded into the binaries at build time.
+1. **System ROMs**: bundled in `tools/adamcore/roms/` (public domain; see
+   COMPLIANCE.md) and embedded into the binaries at build time.
 2. **adamcore sources**: staged automatically at configure time from
    `~/Workspace/adamcore` (override with `ADAMCORE_SRC=…`).
 3. **FujiNet runtime** (optional but the point of the app):
@@ -98,10 +97,12 @@ lines), `FUJINET_WEBUI_BIND=addr:port` (web UI bind, default
 ```sh
 brew install cmake ninja sdl3
 git clone https://github.com/tschak909/adamcore.git ~/Workspace/adamcore
-# drop your ROMs into tools/adamcore/roms/ as above
 cmake -B build -G Ninja && cmake --build build
 open "build/frontends/macos/FujiNet Go Adam.app"
 ```
+
+Or skip building: every CI run uploads a ready-to-run
+`FujiNet-Go-Adam-macos` app-bundle artifact.
 
 (`ADAMCORE_SRC=/path/to/adamcore` overrides the default checkout
 location.) The FujiNet runtime build for macOS (`libfujinet.dylib`) is not
