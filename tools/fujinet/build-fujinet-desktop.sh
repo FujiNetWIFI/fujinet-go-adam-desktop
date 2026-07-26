@@ -123,14 +123,17 @@ ensure_mbedtls() {
 from pathlib import Path
 import sys
 config_h = Path(sys.argv[1])
-text = config_h.read_text()
+IO = dict(encoding="utf-8", errors="surrogateescape", newline="")
+with open(config_h, "r", **IO) as f:
+    text = f.read()
 for old, new in (
     ('//#define MBEDTLS_THREADING_C\n', '#define MBEDTLS_THREADING_C\n'),
     ('//#define MBEDTLS_THREADING_PTHREAD\n', '#define MBEDTLS_THREADING_PTHREAD\n'),
 ):
     if old in text:
         text = text.replace(old, new)
-config_h.write_text(text)
+with open(config_h, "w", **IO) as f:
+    f.write(text)
 PY
         cmake -S "${MBEDTLS_SOURCE_DIR}" -B "${MBEDTLS_BUILD_DIR}" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -232,12 +235,31 @@ import sys
 clone_dir = Path(sys.argv[1])
 support_dir = Path(sys.argv[2])
 
+# Read and write the staged sources as UTF-8 with no newline translation,
+# whatever the platform's locale says. Python on Windows would otherwise
+# decode them as cp1252 (a stray 0x90 in the firmware tree is enough to kill
+# the build) and turn every LF into CRLF on the way back out, which would
+# corrupt the shell scripts it just patched. surrogateescape keeps any
+# non-UTF-8 byte intact through the round trip.
+IO_ARGS = dict(encoding="utf-8", errors="surrogateescape", newline="")
+
+
+def read_file(path):
+    with open(path, "r", **IO_ARGS) as f:
+        return f.read()
+
+
+def write_file(path, text):
+    with open(path, "w", **IO_ARGS) as f:
+        f.write(text)
+
+
 def write_if_changed(path, text):
     """Leave the mtime alone when nothing moved, so the FujiNet build stays
     incremental across re-stagings."""
-    if path.exists() and path.read_text() == text:
+    if path.exists() and read_file(path) == text:
         return
-    path.write_text(text)
+    write_file(path, text)
 
 
 def patch(rel, transforms, required=True):
@@ -246,7 +268,7 @@ def patch(rel, transforms, required=True):
         if required:
             sys.exit(f"build-fujinet-desktop.sh: expected file missing: {rel}")
         return
-    text = p.read_text()
+    text = read_file(p)
     for old, new, *opt in transforms:
         count = opt[0] if opt else 1
         if old not in text:
@@ -643,7 +665,7 @@ desktop_dir = clone_dir / "desktop"
 desktop_dir.mkdir(exist_ok=True)
 write_if_changed(
     desktop_dir / "fujinet_desktop_entry.cpp",
-    (support_dir / "fujinet_desktop_entry.cpp").read_text(),
+    read_file(support_dir / "fujinet_desktop_entry.cpp"),
 )
 write_if_changed(
     desktop_dir / "fujinet_embedded.map",
@@ -677,7 +699,11 @@ force_boip_config() {
 from pathlib import Path
 import sys, re
 ini = Path(sys.argv[1])
-text = ini.read_text() if ini.exists() else ""
+IO = dict(encoding="utf-8", errors="surrogateescape", newline="")
+text = ""
+if ini.exists():
+    with open(ini, "r", **IO) as f:
+        text = f.read()
 section = "[BOIP]\nenabled=1\nhost=127.0.0.1\nport=65216\n"
 if re.search(r'(?im)^\[BOIP\]', text):
     text = re.sub(r'(?ims)^\[BOIP\].*?(?=^\[|\Z)', section, text)
@@ -685,7 +711,8 @@ else:
     if text and not text.endswith("\n"):
         text += "\n"
     text += "\n" + section
-ini.write_text(text)
+with open(ini, "w", **IO) as f:
+    f.write(text)
 PY
 }
 
