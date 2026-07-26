@@ -204,7 +204,7 @@ void MainWindow::showAbout()
     QMessageBox::about(
         this, QStringLiteral("About FujiNet Go Adam"),
         QStringLiteral(
-            "<b>FujiNet Go Adam</b> 0.1.0<br>"
+            "<b>FujiNet Go Adam</b> " ADAM_VERSION_STRING "<br>"
             "Self-contained Coleco ADAM with built-in FujiNet.<br>"
             "Copyright © 2026 Thomas Cherryhomes — GPL-3.0-or-later<br>"
             "<a href=\"https://fujinet.online/\">fujinet.online</a>"));

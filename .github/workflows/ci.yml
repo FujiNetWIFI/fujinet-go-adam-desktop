@@ -15,9 +15,13 @@
 
 name: CI
 
+# Tags starting with v build the same way and then publish: the artifacts
+# each job already produces become the release assets (see the release job
+# at the bottom, and "Cutting a release" in the README).
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -242,3 +246,63 @@ jobs:
         with:
           name: FujiNet-Go-Adam-flatpak
           path: FujiNet-Go-Adam.flatpak
+
+  # Publishing. Runs only for v* tags, and only once every platform has
+  # built and tested: the release carries exactly the binaries CI verified.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, windows, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      # The version lives in CMakeLists.txt and the AppStream metainfo (which
+      # is where release notes belong). A tag that disagrees with them would
+      # ship packages whose About box contradicts the download, so stop here
+      # instead -- delete the tag, fix the version, tag again.
+      - name: Check the tag matches the declared version
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          project=$(sed -n 's/^project(.*VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [ "$tag" != "$project" ]; then
+            echo "::error::tag v$tag but CMakeLists.txt says $project"
+            exit 1
+          fi
+          for m in frontends/*/data/*.metainfo.xml; do
+            if ! grep -q "<release version=\"$tag\"" "$m"; then
+              echo "::error::$m has no <release version=\"$tag\"> entry"
+              exit 1
+            fi
+          done
+          echo "version $tag agrees across CMakeLists.txt and the metainfo"
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      # download-artifact unpacks each artifact into its own directory, so
+      # the folder-shaped Windows one is re-zipped for the release page.
+      - name: Assemble release assets
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          mkdir -p release
+          cp "artifacts/FujiNet-Go-Adam-macos/FujiNet-Go-Adam-macos.zip" \
+             "release/FujiNet-Go-Adam-${tag}-macos.zip"
+          cp "artifacts/FujiNet-Go-Adam-flatpak/FujiNet-Go-Adam.flatpak" \
+             "release/FujiNet-Go-Adam-${tag}.flatpak"
+          (cd artifacts/FujiNet-Go-Adam-windows \
+           && zip -qr "../../release/FujiNet-Go-Adam-${tag}-windows.zip" .)
+          ls -l release
+      # Creates the release when the tag was pushed on its own (as a draft,
+      # so the notes can be written before it goes out); when the release
+      # already exists -- made in the web UI -- it is left alone and only
+      # the assets are attached.
+      - name: Publish the assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --draft --generate-notes \
+              --title "FujiNet Go Adam $tag"
+          fi
+          gh release upload "$tag" release/* --clobber

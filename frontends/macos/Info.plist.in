@@ -12,7 +12,7 @@
   <key>CFBundleExecutable</key>
   <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>${PROJECT_VERSION}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>NSHighResolutionCapable</key>

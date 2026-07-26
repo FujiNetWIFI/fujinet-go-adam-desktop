@@ -189,6 +189,35 @@ flatpak run online.fujinet.go.adam.gnome
 This is also the manifest GNOME Builder picks up: open the project and
 press Run.
 
+## Cutting a release
+
+Pushing a `v*` tag runs the normal CI build on every platform and, only if
+all of it passes, publishes the packages it produced as release assets:
+
+| Asset | Contents |
+|---|---|
+| `FujiNet-Go-Adam-<version>-macos.zip` | the `.app` bundle (SDL and FujiNet inside) |
+| `FujiNet-Go-Adam-<version>-windows.zip` | the exe, `fujinet.dll`, and the `fujinet/` runtime tree |
+| `FujiNet-Go-Adam-<version>.flatpak` | single-file bundle: `flatpak install ./…flatpak` |
+
+The version is declared in the tree, not derived from the tag, so that a
+downloaded build's About box can never disagree with the download it came
+from — the release job checks the two match and stops if they do not. To
+release 0.2.0:
+
+1. `project(... VERSION 0.2.0 ...)` in `CMakeLists.txt` (the About boxes,
+   the macOS bundle and the Windows folder all follow from there).
+2. Add a `<release version="0.2.0" date="…"/>` entry to both
+   `frontends/*/data/*.metainfo.xml` — this is what software centres show,
+   so put the user-visible notes there.
+3. Commit, then `git tag v0.2.0 && git push origin v0.2.0`.
+
+The release is created as a **draft** so the notes can be edited before it
+goes out; if you prefer to write the release in the web UI first, do that
+and the assets are attached to it when the tag build finishes. Note that
+the macOS bundle is unsigned and unnotarised: first launch needs
+right-click ▸ Open.
+
 ## Repository layout
 
 ```

@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(fujinet-go-adam-desktop VERSION 0.1.0 LANGUAGES C CXX)
+# The version lives here and nowhere else: the About boxes, the macOS bundle
+# and the release workflow all take it from PROJECT_VERSION, and cutting a
+# tag checks that the tag agrees with it (see "Cutting a release" in the
+# README).
+project(fujinet-go-adam-desktop VERSION 0.2.0 LANGUAGES C CXX)
+
+add_compile_definitions(ADAM_VERSION_STRING="${PROJECT_VERSION}")
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)

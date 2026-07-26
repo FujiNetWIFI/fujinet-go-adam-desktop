@@ -473,7 +473,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_DEBUGGER:   open_debugger(); break;
         case IDM_ABOUT:
             MessageBoxA(hwnd,
-                        "FujiNet Go Adam 0.1.0\n"
+                        "FujiNet Go Adam " ADAM_VERSION_STRING "\n"
                         "Self-contained Coleco ADAM with built-in FujiNet.\n"
                         "Copyright (C) 2026 Thomas Cherryhomes\n"
                         "GPL-3.0-or-later",
