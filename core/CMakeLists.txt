@@ -41,15 +41,10 @@ else()
 endif()
 
 # adamcore's socket helpers (net.h): POSIX sockets everywhere, Winsock on
-# Windows. The upstream core carries only the POSIX backend so far, so the
-# desktop tree supplies the Windows one -- and steps aside as soon as an
-# adamcore checkout brings its own.
+# Windows. Both backends come from adamcore itself -- the desktop tree
+# carried a stand-in net_win32.c until upstream grew one (adamcore cd38ead).
 if(WIN32)
-  if(EXISTS "${ADAMCORE_GEN}/src/net_win32.c")
-    set(ADAMCORE_NET_SRC "${ADAMCORE_GEN}/src/net_win32.c")
-  else()
-    set(ADAMCORE_NET_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/net_win32.c")
-  endif()
+  set(ADAMCORE_NET_SRC "${ADAMCORE_GEN}/src/net_win32.c")
 else()
   set(ADAMCORE_NET_SRC "${ADAMCORE_GEN}/src/net_posix.c")
 endif()

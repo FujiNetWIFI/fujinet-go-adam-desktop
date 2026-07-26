@@ -16,6 +16,12 @@
     </p>
   </description>
   <launchable type="desktop-id">online.fujinet.go.adam.gnome.desktop</launchable>
+  <!-- Software centres classify from these, not from the .desktop
+       Categories= line; without them the app lands in no section at all. -->
+  <categories>
+    <category>Game</category>
+    <category>Emulator</category>
+  </categories>
   <url type="homepage">https://fujinet.online/</url>
   <url type="bugtracker">https://github.com/FujiNetWIFI/fujinet-go-adam-desktop/issues</url>
   <developer id="online.fujinet">
@@ -23,6 +29,14 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.0" date="2026-07-26">
+      <description>
+        <p>
+          Fixes a duplicate block problem in the ADAMnet-over-IP transport
+          that could corrupt block reads from FujiNet.
+        </p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-07-26">
       <description>
         <p>

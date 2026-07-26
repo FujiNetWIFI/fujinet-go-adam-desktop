@@ -15,8 +15,9 @@ Done (this pass)
   and builds SDL3 + mbedTLS + the python webui deps + adamcore +
   fujinet-firmware from declared sources -- verified end to end, and the app
   installs as "FujiNet Go Adam" with its icon.
-* Windows: net_win32.c (adamcore's net.h over Winsock) so the MinGW build
-  links at all; native Win32 debugger window (F12); app manifest for
+* Windows: a Winsock backend for adamcore's net.h so the MinGW build links
+  at all -- carried here as a stand-in, now upstreamed and taken from
+  adamcore (cd38ead); native Win32 debugger window (F12); app manifest for
   comctl32 v6 + per-monitor DPI; checked-in mingw-w64 cross toolchain.
 
 Done (Windows FujiNet pass)
@@ -38,8 +39,6 @@ Done (Windows FujiNet pass)
 Next
 ----
 
-* Upstream the Winsock backend into adamcore (core/src/net_win32.c is a
-  stand-in; core/CMakeLists.txt prefers an adamcore-provided one).
 * Windows debugger polish: the VDP page does not resize its views, and
   register/memory editing is Enter-to-apply only.
 * Windows: no SAM audio path yet (the DLL exports it; the frontend does not
@@ -50,3 +49,13 @@ Next
   went end-of-life in March 2026) and CI builds SDL release-3.4.12 -- both
   need a bump when the next runtime/SDL ships. `flatpak remote-ls flathub
   --runtime | grep org.gnome.Platform` lists what is available.
+
+
+GNOME
+-----
+
+Installing under GNOME-OS doesn't cause the application to show up in the applications menu. It should be classified as a game.
+
+There are no screenshots in the flatpak's description page.
+
+
