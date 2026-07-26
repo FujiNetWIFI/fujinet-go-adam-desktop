@@ -24,7 +24,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolkit dependencies
         run: |
           sudo apt-get update
@@ -34,7 +34,7 @@ jobs:
             python3-venv python3-yaml python3-jinja2 desktop-file-utils
       - name: Build and install SDL3
         run: |
-          git clone --depth 1 --branch release-3.2.16 \
+          git clone --depth 1 --branch release-3.4.12 \
             https://github.com/libsdl-org/SDL.git sdl3-src
           cmake -S sdl3-src -B sdl3-src/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
@@ -60,7 +60,7 @@ jobs:
   macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install dependencies
         run: brew install ninja
       # SDL3 is linked STATICALLY on macOS so the shipped .app has no
@@ -69,7 +69,7 @@ jobs:
       # have Homebrew's sdl3 installed.
       - name: Build and install static SDL3
         run: |
-          git clone --depth 1 --branch release-3.2.16 \
+          git clone --depth 1 --branch release-3.4.12 \
             https://github.com/libsdl-org/SDL.git sdl3-src
           cmake -S sdl3-src -B sdl3-src/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
@@ -113,7 +113,7 @@ jobs:
             "build/frontends/macos/FujiNet Go Adam.app" \
             FujiNet-Go-Adam-macos.zip
       - name: Upload app bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: FujiNet-Go-Adam-macos
           path: FujiNet-Go-Adam-macos.zip
@@ -124,7 +124,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -139,7 +139,7 @@ jobs:
       # dependencies -- not even SDL3.dll or the MinGW runtime.
       - name: Build and install static SDL3
         run: |
-          git clone --depth 1 --branch release-3.2.16 \
+          git clone --depth 1 --branch release-3.4.12 \
             https://github.com/libsdl-org/SDL.git sdl3-src
           cmake -S sdl3-src -B sdl3-src/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
@@ -169,7 +169,7 @@ jobs:
             exit 1
           fi
       - name: Upload exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: FujiNet-Go-Adam-windows
           path: build/frontends/windows/fujinet-go-adam-windows.exe
@@ -180,17 +180,17 @@ jobs:
   flatpak:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Driven directly rather than through the usual community container
-      # image: its tags stop at gnome-47, and this manifest targets 48.
-      - name: Install flatpak and the GNOME 48 runtime
+      # image: its tags stop at gnome-47, and this manifest targets 49.
+      - name: Install flatpak and the GNOME 49 runtime
         run: |
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder
           flatpak remote-add --user --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y --noninteractive flathub \
-            org.gnome.Platform//48 org.gnome.Sdk//48
+            org.gnome.Platform//49 org.gnome.Sdk//49
       # --disable-rofiles-fuse: FUSE is not available to the runner user.
       - name: Build the flatpak
         run: |
@@ -202,7 +202,7 @@ jobs:
           flatpak build-bundle flatpak-repo FujiNet-Go-Adam.flatpak \
             online.fujinet.go.adam.gnome master
       - name: Upload bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: FujiNet-Go-Adam-flatpak
           path: FujiNet-Go-Adam.flatpak

@@ -31,5 +31,7 @@ Next
   register/memory editing is Enter-to-apply only.
 * Flathub submission (AppStream metadata is in place); flatpak for the KDE
   frontend.
-* Watch the new CI jobs: linux now builds FujiNet, and the flatpak job is
-  new (bilelmoussaoui/flatpak-github-actions image, gnome-48).
+* Keep the versions current: the flatpak targets the GNOME 49 runtime (48
+  went end-of-life in March 2026) and CI builds SDL release-3.4.12 -- both
+  need a bump when the next runtime/SDL ships. `flatpak remote-ls flathub
+  --runtime | grep org.gnome.Platform` lists what is available.

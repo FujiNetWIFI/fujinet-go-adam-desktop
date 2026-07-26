@@ -15,12 +15,14 @@
 #       build-aux/flatpak/online.fujinet.go.adam.gnome.yml
 #   flatpak run online.fujinet.go.adam.gnome
 #
-# NOTE: written against org.gnome.Platform 48; bump runtime-version (and the
-# SDL tag) to what `flatpak remote-ls flathub --runtime` offers you.
+# NOTE: bump runtime-version (and the SDL tag) as new GNOME runtimes ship;
+# `flatpak remote-ls flathub --runtime | grep org.gnome.Platform` lists what
+# is available. Old runtimes go end-of-life quickly -- 48 was retired in
+# March 2026.
 
 app-id: online.fujinet.go.adam.gnome
 runtime: org.gnome.Platform
-runtime-version: '48'
+runtime-version: '49'
 sdk: org.gnome.Sdk
 command: fujinet-go-adam-gnome
 
@@ -43,9 +45,10 @@ modules:
     sources:
       - type: git
         url: https://github.com/libsdl-org/SDL.git
-        # Pin the release you validated against (local dev used SDL 3.4).
-        tag: release-3.2.16
-        commit: c9a6709bd21750f1ad9597be21abace78c6378c9
+        # Pin the release you validated against; keep it in step with the
+        # SDL the CI jobs build (.github/workflows/ci.yml).
+        tag: release-3.4.12
+        commit: f87239e71e42da91ca317a12eefb82cfbf3393eb
 
   # FujiNet links mbedTLS statically and needs 3.x (4.x drops the legacy
   # mbedtls/md5.h it includes); the runtime ships none. Threading is switched
@@ -62,6 +65,10 @@ modules:
       - -DUSE_STATIC_MBEDTLS_LIBRARY=ON
       - -DUSE_SHARED_MBEDTLS_LIBRARY=OFF
       - -DLINK_WITH_PTHREAD=ON
+      # Left to GNUInstallDirs this lands in lib64 on some builders and lib
+      # on others; the FujiNet build has to find it either way, but pinning
+      # it keeps the two ends predictable.
+      - -DCMAKE_INSTALL_LIBDIR=lib
     cleanup:
       - '*'
     sources:

@@ -17,7 +17,10 @@
   </description>
   <launchable type="desktop-id">online.fujinet.go.adam.kde.desktop</launchable>
   <url type="homepage">https://fujinet.online/</url>
-  <developer_name>Thomas Cherryhomes</developer_name>
+  <url type="bugtracker">https://github.com/FujiNetWIFI/fujinet-go-adam-desktop/issues</url>
+  <developer id="online.fujinet">
+    <name>Thomas Cherryhomes</name>
+  </developer>
   <content_rating type="oars-1.1"/>
   <releases>
     <release version="0.1.0" date="2026-07-22"/>

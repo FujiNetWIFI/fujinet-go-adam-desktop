@@ -5,7 +5,7 @@
 # ever sees them. Wine can then run the result for a smoke test.
 #
 #   # once: SDL3 for the cross target
-#   git clone --depth 1 --branch release-3.2.16 \
+#   git clone --depth 1 --branch release-3.4.12 \
 #       https://github.com/libsdl-org/SDL.git /tmp/sdl3-src
 #   cmake -S /tmp/sdl3-src -B /tmp/sdl3-src/build -G Ninja \
 #       -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/toolchains/mingw-w64.cmake \
