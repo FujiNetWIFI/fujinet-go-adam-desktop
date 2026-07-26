@@ -41,7 +41,8 @@ platforms are very welcome.
   `.col`/`.bin` cartridges (boots in ColecoVision mode).
 - Shared settings: palette, expansion module, joystick mode, aspect mode…
   are stored once (`~/.config/fujinet-go-adam/settings.ini`) and shared by
-  both frontends.
+  every frontend — GNOME preferences, the Qt settings dialog and the macOS
+  Settings window (⌘,) all read and write the same keys.
 - No on-screen input panels appear unless you ask for them.
 
 ### Developer debugger (F12)

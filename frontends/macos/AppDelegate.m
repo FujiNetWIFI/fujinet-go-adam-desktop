@@ -1,9 +1,8 @@
 /*
  * AppDelegate: builds the menu bar and main window, owns the session
  * lifecycle, and hosts the FujiNet configuration (WKWebView) and console
- * log windows. Mirrors the GTK/Qt frontends over the same adamsession API.
- * The native debugger views arrive in a later milestone; the engine
- * underneath is already portable.
+ * log windows. Mirrors the GTK/Qt frontends over the same adamsession API,
+ * with the native debugger window in debugger/DebuggerWindow.m.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -30,6 +29,26 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     return types;
 }
 
+/* Settings that describe the machine: changing one needs the session
+ * restarted, which is deferred until the Settings window closes so editing
+ * several options does not reboot the ADAM under the user. Everything else
+ * (the display options) applies live. */
+static NSArray<NSString *> *machineSettingKeys(void)
+{
+    static NSArray<NSString *> *keys;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      keys = @[
+          @"machine", @"palette", @"expansion", @"joystick_mode",
+          @"swap_buttons", @"reverse_keypad"
+      ];
+    });
+    return keys;
+}
+
+@interface AppDelegate () <NSWindowDelegate>
+@end
+
 @implementation AppDelegate {
     adamsession *_session;
     NSWindow *_window;
@@ -38,6 +57,8 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     NSWindow *_logWindow;
     NSTextView *_logView;
     NSTimer *_logTimer;
+    NSWindow *_settingsWindow;
+    BOOL _machineDirty;
 }
 
 - (instancetype)initWithSession:(adamsession *)session
@@ -129,10 +150,13 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
         return;
     }
     NSRect frame = NSMakeRect(0, 0, 1000, 760);
+    /* Miniaturizable so Window ▸ Minimize (and the yellow button) apply to
+     * the auxiliary windows too, not just the machine window. */
     _configWindow = [[NSWindow alloc]
         initWithContentRect:frame
                   styleMask:NSWindowStyleMaskTitled |
                             NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskMiniaturizable |
                             NSWindowStyleMaskResizable
                     backing:NSBackingStoreBuffered
                       defer:NO];
@@ -161,6 +185,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
         initWithContentRect:frame
                   styleMask:NSWindowStyleMaskTitled |
                             NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskMiniaturizable |
                             NSWindowStyleMaskResizable
                     backing:NSBackingStoreBuffered
                       defer:NO];
@@ -207,6 +232,181 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     [DebuggerWindow showForSession:_session];
 }
 
+/* ---- settings ------------------------------------------------------------- */
+
+/* Rows write straight through to the shared settings store, the way the
+ * GNOME preferences window does -- same keys, same defaults, same option
+ * order as the GTK and Qt frontends (and the Android app's Settings.kt), so
+ * a machine configured in one shows up the same in the others. */
+
+- (NSTextField *)sectionLabel:(NSString *)title
+{
+    NSTextField *label = [NSTextField labelWithString:title];
+    label.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+    return label;
+}
+
+- (NSPopUpButton *)popUpForKey:(const char *)key
+                       fallback:(int)def
+                          items:(NSArray<NSString *> *)items
+{
+    NSPopUpButton *popup = [[NSPopUpButton alloc] init];
+    [popup addItemsWithTitles:items];
+    NSInteger current = adamsession_get_int(_session, key, def);
+    if (current < 0 || current >= (NSInteger)items.count)
+        current = def;
+    [popup selectItemAtIndex:current];
+    popup.identifier = @(key);
+    popup.target = self;
+    popup.action = @selector(settingChanged:);
+    return popup;
+}
+
+- (NSButton *)checkBoxForKey:(const char *)key fallback:(int)def
+{
+    NSButton *box = [NSButton checkboxWithTitle:@""
+                                         target:self
+                                         action:@selector(settingChanged:)];
+    box.state = adamsession_get_int(_session, key, def)
+                    ? NSControlStateValueOn
+                    : NSControlStateValueOff;
+    box.identifier = @(key);
+    return box;
+}
+
+- (void)settingChanged:(id)sender
+{
+    NSControl *control = sender;
+    NSString *key = control.identifier;
+    int value;
+
+    if ([control isKindOfClass:[NSPopUpButton class]])
+        value = (int)((NSPopUpButton *)control).indexOfSelectedItem;
+    else
+        value = ((NSButton *)control).state == NSControlStateValueOn ? 1 : 0;
+
+    adamsession_set_int(_session, key.UTF8String, value);
+
+    if ([machineSettingKeys() containsObject:key])
+        _machineDirty = YES;
+    else
+        [self applyDisplaySettings];
+}
+
+- (void)showSettings:(id)sender
+{
+    (void)sender;
+    if (_settingsWindow) {
+        [_settingsWindow makeKeyAndOrderFront:nil];
+        return;
+    }
+
+    NSArray<NSArray<NSView *> *> *rows = @[
+        @[ [self sectionLabel:@"Machine"], [NSTextField labelWithString:@""] ],
+        @[
+            [NSTextField labelWithString:@"Machine"],
+            [self popUpForKey:"machine"
+                     fallback:0
+                        items:@[ @"ADAM (computer)", @"ColecoVision (game)" ]]
+        ],
+        @[
+            [NSTextField labelWithString:@"Palette"],
+            [self popUpForKey:"palette"
+                     fallback:0
+                        items:@[
+                            @"Default (TMS9928)", @"Palette 2", @"Palette 3",
+                            @"Palette 4"
+                        ]]
+        ],
+        @[
+            [NSTextField labelWithString:@"Expansion module"],
+            [self popUpForKey:"expansion"
+                     fallback:0
+                        items:@[
+                            @"None", @"Roller controller (mouse)",
+                            @"Roller controller (joystick)",
+                            @"Driving module (joystick)",
+                            @"Driving module (mouse)",
+                            @"Super Action speed roller, both ports (mouse)",
+                            @"Speed roller, port 1 (mouse)",
+                            @"Speed roller, port 2 (mouse)"
+                        ]]
+        ],
+        @[
+            [NSTextField labelWithString:@"Joystick mode"],
+            [self popUpForKey:"joystick_mode"
+                     fallback:1
+                        items:@[
+                            @"No joystick", @"Both ports", @"Port 2 only",
+                            @"Port 1 only"
+                        ]]
+        ],
+        @[
+            [NSTextField labelWithString:@"Swap joystick buttons"],
+            [self checkBoxForKey:"swap_buttons" fallback:0]
+        ],
+        @[
+            [NSTextField labelWithString:@"Reverse keypad"],
+            [self checkBoxForKey:"reverse_keypad" fallback:0]
+        ],
+        @[ [self sectionLabel:@"Display"], [NSTextField labelWithString:@""] ],
+        @[
+            [NSTextField labelWithString:@"Aspect ratio"],
+            [self popUpForKey:"aspect_mode"
+                     fallback:0
+                        items:@[
+                            @"Square pixels (256:212)", @"TV (4:3)",
+                            @"Integer scale"
+                        ]]
+        ],
+        @[
+            [NSTextField labelWithString:@"Smooth scaling"],
+            [self checkBoxForKey:"smooth_scaling" fallback:0]
+        ],
+    ];
+
+    NSGridView *grid = [NSGridView gridViewWithViews:rows];
+    grid.rowSpacing = 8;
+    grid.columnSpacing = 12;
+    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
+
+    NSTextField *note = [NSTextField
+        labelWithString:@"Display options apply immediately. Machine options "
+                        @"take effect when this window is closed."];
+    note.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    note.textColor = NSColor.secondaryLabelColor;
+
+    NSStackView *root = [NSStackView stackViewWithViews:@[ grid, note ]];
+    root.orientation = NSUserInterfaceLayoutOrientationVertical;
+    root.alignment = NSLayoutAttributeLeading;
+    root.spacing = 12;
+    root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
+
+    _settingsWindow = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, 520, 420)
+                  styleMask:NSWindowStyleMaskTitled |
+                            NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskMiniaturizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    _settingsWindow.title = @"Settings";
+    _settingsWindow.releasedWhenClosed = NO;
+    _settingsWindow.delegate = self;
+    _settingsWindow.contentView = root;
+    [_settingsWindow center];
+    [_settingsWindow makeKeyAndOrderFront:nil];
+}
+
+/* Machine options are collected while the window is open and applied in one
+ * restart when it closes. */
+- (void)windowWillClose:(NSNotification *)note
+{
+    if (note.object != _settingsWindow || !_machineDirty)
+        return;
+    _machineDirty = NO;
+    [self restartSession];
+}
+
 /* ---- menus ---------------------------------------------------------------- */
 
 - (NSMenuItem *)item:(NSString *)title action:(SEL)sel key:(NSString *)key
@@ -220,15 +420,49 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 
 - (void)buildMenus
 {
+    NSString *appName = @"FujiNet Go Adam";
     NSMenu *menubar = [[NSMenu alloc] init];
 
+    /* A menu bar built in code gets nothing for free: the standard items
+     * every Mac app is expected to have (Services, Hide/Hide Others/Show
+     * All, Minimize/Zoom, the window list) exist only if they are added
+     * here -- and Services and the window list stay empty until AppKit is
+     * told which menus they belong to (servicesMenu / windowsMenu). */
     NSMenuItem *appItem = [[NSMenuItem alloc] init];
     NSMenu *appMenu = [[NSMenu alloc] init];
-    [appMenu addItemWithTitle:@"About FujiNet Go Adam"
+    [appMenu addItemWithTitle:[@"About " stringByAppendingString:appName]
                        action:@selector(orderFrontStandardAboutPanel:)
                 keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:@"Quit FujiNet Go Adam"
+
+    [appMenu addItem:[self item:@"Settings…"
+                         action:@selector(showSettings:)
+                            key:@","]];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenu *servicesMenu = [[NSMenu alloc] initWithTitle:@"Services"];
+    NSMenuItem *servicesItem = [appMenu addItemWithTitle:@"Services"
+                                                  action:NULL
+                                           keyEquivalent:@""];
+    servicesItem.submenu = servicesMenu;
+    NSApp.servicesMenu = servicesMenu;
+    [appMenu addItem:[NSMenuItem separatorItem]];
+
+    [appMenu addItemWithTitle:[@"Hide " stringByAppendingString:appName]
+                       action:@selector(hide:)
+                keyEquivalent:@"h"];
+    NSMenuItem *hideOthers =
+        [appMenu addItemWithTitle:@"Hide Others"
+                           action:@selector(hideOtherApplications:)
+                    keyEquivalent:@"h"];
+    hideOthers.keyEquivalentModifierMask =
+        NSEventModifierFlagOption | NSEventModifierFlagCommand;
+    [appMenu addItemWithTitle:@"Show All"
+                       action:@selector(unhideAllApplications:)
+                keyEquivalent:@""];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+
+    [appMenu addItemWithTitle:[@"Quit " stringByAppendingString:appName]
                        action:@selector(terminate:)
                 keyEquivalent:@"q"];
     appItem.submenu = appMenu;
@@ -285,6 +519,31 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     [view addItem:dbg];
     viewItem.submenu = view;
     [menubar addItem:viewItem];
+
+    /* Window menu. AppKit appends the list of open windows (the main
+     * window, the debugger, the FujiNet console log) to whichever menu is
+     * handed to windowsMenu, and manages their check marks -- that list is
+     * what "show or hide windows" means to a Mac user. */
+    NSMenuItem *windowItem = [[NSMenuItem alloc] init];
+    NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+    /* Close lives here rather than in a File menu: there is no File menu,
+     * and the debugger / config / log windows need a keyboard close. */
+    [windowMenu addItemWithTitle:@"Close"
+                          action:@selector(performClose:)
+                   keyEquivalent:@"w"];
+    [windowMenu addItemWithTitle:@"Minimize"
+                          action:@selector(performMiniaturize:)
+                   keyEquivalent:@"m"];
+    [windowMenu addItemWithTitle:@"Zoom"
+                          action:@selector(performZoom:)
+                   keyEquivalent:@""];
+    [windowMenu addItem:[NSMenuItem separatorItem]];
+    [windowMenu addItemWithTitle:@"Bring All to Front"
+                          action:@selector(arrangeInFront:)
+                   keyEquivalent:@""];
+    windowItem.submenu = windowMenu;
+    [menubar addItem:windowItem];
+    NSApp.windowsMenu = windowMenu;
 
     NSApp.mainMenu = menubar;
 }
