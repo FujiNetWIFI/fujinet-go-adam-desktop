@@ -43,6 +43,15 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.1" date="2026-07-26">
+      <description>
+        <p>
+          Windows: FujiNet now starts. The shipped runtime library pulled in
+          two libraries that were not part of the download, so it failed to
+          load and the ADAM booted to SmartWriter with no FujiNet at all.
+        </p>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-07-26">
       <description>
         <p>

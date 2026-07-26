@@ -257,19 +257,45 @@ jobs:
           test -f "$DLL" || { echo "::error::$DLL missing"; exit 1; }
           objdump -p "$DLL" | grep -q fujinet_desktop_start_runtime \
             || { echo "::error::entry points not exported"; exit 1; }
-      # A self-contained GUI exe depends only on system DLLs (kernel32,
-      # user32, gdi32, ...); anything under the MSYS prefix means a runtime
-      # DLL leaked in and the exe would not run on a clean Windows box.
-      - name: Verify the exe is self-contained
+      # Both binaries in the artifact must depend only on system DLLs
+      # (kernel32, user32, ws2_32, the api-ms-win-crt-* set, ...); anything
+      # under the MSYS prefix is absent on a clean Windows box.
+      #
+      # The DLL is checked by import table rather than by ldd: ldd resolves
+      # against the build machine's PATH, where the MSYS copies exist, so it
+      # reports a dependency as satisfied that the target will not have.
+      # fujinet.dll shipped importing libcrypto-3-x64.dll and zlib1.dll this
+      # way -- the exe launched, LoadLibrary failed, and the ADAM quietly fell
+      # through to SmartWriter with no FujiNet.
+      - name: Verify the shipped binaries are self-contained
         run: |
+          fail=0
           EXE=build/frontends/windows/fujinet-go-adam-windows.exe
-          test -f "$EXE" || { echo "::error::exe not built"; exit 1; }
+          DLL=tools/fujinet/work/out/fujinet.dll
+          for f in "$EXE" "$DLL"; do
+            test -f "$f" || { echo "::error::$f not built"; exit 1; }
+            echo "--- $f imports ---"
+            imports=$(objdump -p "$f" | sed -n 's/^\s*DLL Name: //p' | sort -u)
+            echo "$imports"
+            # Whitelist: Windows system DLLs and the UCRT stubs. Anything else
+            # ships from the MSYS2 prefix and will not resolve on the target.
+            bad=$(echo "$imports" | grep -ivE \
+              '^(api-ms-win-[a-z0-9el-]+|kernel32|user32|gdi32|advapi32|shell32|ole32|oleaut32|comctl32|comdlg32|imm32|winmm|version|setupapi|dwmapi|ws2_32|iphlpapi|bcrypt|crypt32|secur32|netapi32|userenv|dbghelp|shlwapi|msvcrt|ucrtbase|rpcrt4|winspool|uxtheme|hid|cfgmgr32|powrprof|avrt|dxgi|d3d11|opengl32)\.dll$' \
+              || true)
+            if [ -n "$bad" ]; then
+              echo "::error::$f imports non-system DLLs that are not shipped:"
+              echo "$bad"
+              fail=1
+            fi
+          done
+          # ldd on the exe as well: catches a transitively pulled runtime that
+          # the import table alone would not show.
           deps=$(ldd "$EXE" 2>/dev/null || true)
-          echo "$deps"
           if echo "$deps" | grep -iE "/ucrt64|/mingw|/msys"; then
             echo "::error::MSYS/MinGW runtime DLL leaked into the exe"
-            exit 1
+            fail=1
           fi
+          exit $fail
       # The artifact is the folder you copy and run: the exe, fujinet.dll
       # beside it (where the session looks first), and the pristine FujiNet
       # runtime tree it provisions from on first start.
