@@ -24,6 +24,20 @@
   </categories>
   <url type="homepage">https://fujinet.online/</url>
   <url type="bugtracker">https://github.com/FujiNetWIFI/fujinet-go-adam-desktop/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>FujiNet CONFIG running on the emulated ADAM</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/main/data/screenshots/1_running_config.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The built-in debugger's live VDP table viewer</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/main/data/screenshots/2_VDP_Debugger.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Preferences</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/main/data/screenshots/3_Preferences.png</image>
+    </screenshot>
+  </screenshots>
   <developer id="online.fujinet">
     <name>Thomas Cherryhomes</name>
   </developer>
