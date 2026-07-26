@@ -315,6 +315,15 @@ patch("build.sh", [
         'if [ -z "${PC_BUILD}" ] ; then\n',
         'if [ -z "${PC_TARGET}" ] ; then\n',
     ),
+    # Let the virtualenv see the distribution's python modules. The caller
+    # pre-creates it that way, but build.sh looks for bin/activate and a
+    # Windows venv has Scripts/activate, so it creates one of its own -- and
+    # then pyyaml/jinja2 from the system (or the flatpak sandbox, where
+    # there is no network to pip from) would be invisible.
+    (
+        '        ${PYTHON} -m venv "${VENV_ROOT}" || exit 1\n',
+        '        ${PYTHON} -m venv --system-site-packages "${VENV_ROOT}" || exit 1\n',
+    ),
     (
         '    cmake "$GEN_CMD" .. -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"\n',
         '    cmake "$GEN_CMD" .. "${CMAKE_EXTRA_ARGS[@]}" -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"\n',

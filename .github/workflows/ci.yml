@@ -142,6 +142,7 @@ jobs:
           update: true
           install: >-
             git
+            make
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja

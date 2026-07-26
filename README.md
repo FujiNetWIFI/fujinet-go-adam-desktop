@@ -150,12 +150,15 @@ frontend; SDL3 and the MinGW runtime are linked statically for a
 dependency-free `.exe`):
 
 ```sh
-pacman -S --needed git mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,SDL3} \
+pacman -S --needed git make mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,SDL3} \
     mingw-w64-ucrt-x86_64-{python,python-yaml,python-jinja} \
     mingw-w64-ucrt-x86_64-{mbedtls,openssl,expat,zlib}
 cmake -B build -G Ninja && cmake --build build
 ./build/frontends/windows/fujinet-go-adam-windows.exe
 ```
+
+(`make` is not used for anything — the build runs Ninja — but FujiNet's
+`build.sh` refuses to start without it on the PATH.)
 
 The second and third package lines are what FujiNet needs: the app builds
 `fujinet.dll` and runs the same in-process FujiNet as the other platforms
