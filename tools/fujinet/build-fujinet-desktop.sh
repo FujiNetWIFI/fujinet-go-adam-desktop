@@ -32,6 +32,21 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 ROOT_DIR=$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)
+
+# Under MSYS2 this script runs in an MSYS shell but drives *native* Windows
+# tools (the UCRT64 cmake, ninja and python): they cannot follow /d/a/...
+# paths. cygpath -m gives the Windows form with forward slashes, which bash
+# handles just as happily, so normalise everything up front.
+if command -v cygpath >/dev/null 2>&1; then
+    SCRIPT_DIR="$(cygpath -m "${SCRIPT_DIR}")"
+    ROOT_DIR="$(cygpath -m "${ROOT_DIR}")"
+    if [[ -n "${FUJINET_SRC:-}" ]]; then
+        FUJINET_SRC="$(cygpath -m "${FUJINET_SRC}")"
+    fi
+    if [[ -n "${MBEDTLS_ROOT_DIR:-}" ]]; then
+        export MBEDTLS_ROOT_DIR="$(cygpath -m "${MBEDTLS_ROOT_DIR}")"
+    fi
+fi
 SUPPORT_DIR="${SCRIPT_DIR}/support"
 WORK_ROOT="${SCRIPT_DIR}/work"
 CLONE_DIR="${WORK_ROOT}/fujinet-firmware"
@@ -179,11 +194,17 @@ stage_local_source() {
             --exclude 'build/' --exclude 'dist/' --exclude '.git' \
             "${FUJINET_SRC}/" "${CLONE_DIR}/"
     else
-        # No rsync (the flatpak SDK, for one): copy through tar, preserving
-        # the existing build directory.
+        # No rsync (the flatpak SDK and MSYS2, for two): copy through tar,
+        # preserving the existing build directory. tar is an MSYS program
+        # where one exists, so hand it MSYS-style paths.
+        local src="${FUJINET_SRC}" dst="${CLONE_DIR}"
+        if command -v cygpath >/dev/null 2>&1; then
+            src="$(cygpath -u "${src}")"
+            dst="$(cygpath -u "${dst}")"
+        fi
         mkdir -p "${CLONE_DIR}"
-        tar -C "${FUJINET_SRC}" --exclude=./build --exclude=./dist \
-            --exclude=./.git -cf - . | tar -C "${CLONE_DIR}" -xf -
+        tar -C "${src}" --exclude=./build --exclude=./dist \
+            --exclude=./.git -cf - . | tar -C "${dst}" -xf -
     fi
     rm -rf "${CLONE_DIR}/.git"
 }
@@ -692,9 +713,23 @@ collect_outputs() {
 # lets distribution-provided modules satisfy the check; pip only runs when
 # the modules really are absent.
 prepare_python_env() {
+    local py
+    # Same probe order as fujinet's build.sh: MSYS2 ships python.exe, most
+    # other places python3.
+    for py in python3 python; do
+        if command -v "${py}" >/dev/null 2>&1 &&
+           [[ "$("${py}" -c 'import sys; print(sys.version_info[0])' 2>/dev/null)" == "3" ]]; then
+            break
+        fi
+        py=""
+    done
+    [[ -n "${py}" ]] || fail "python 3 not found"
+
     export VENV_ROOT="${VENV_ROOT:-${WORK_ROOT}/venv}"
-    if [[ ! -f "${VENV_ROOT}/bin/activate" ]]; then
-        python3 -m venv --system-site-packages "${VENV_ROOT}" \
+    # bin/ on POSIX, Scripts/ for a Windows-native python.
+    if [[ ! -f "${VENV_ROOT}/bin/activate" &&
+          ! -f "${VENV_ROOT}/Scripts/activate" ]]; then
+        "${py}" -m venv --system-site-packages "${VENV_ROOT}" \
             || fail "could not create the python virtualenv at ${VENV_ROOT}"
     fi
 }

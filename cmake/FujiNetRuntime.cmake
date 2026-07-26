@@ -36,6 +36,18 @@ if(WITH_FUJINET)
 
   set(FUJINET_SCRIPT "${CMAKE_SOURCE_DIR}/tools/fujinet/build-fujinet-desktop.sh")
 
+  # Always invoke the recipe through bash by name. A native Windows cmake
+  # (MSYS2's, which is what builds the Windows app) hands a bare .sh to
+  # cmd.exe and gets "inappropriate file type or format"; on Linux and macOS
+  # this is what the shebang would have done anyway.
+  find_program(BASH_EXECUTABLE bash)
+  if(NOT BASH_EXECUTABLE)
+    message(FATAL_ERROR
+      "bash is required to build the FujiNet runtime (-DWITH_FUJINET=OFF "
+      "builds the emulator without it). On Windows, build from an MSYS2 "
+      "UCRT64 shell.")
+  endif()
+
   # Re-run the runtime build when the recipe changes or the sources are
   # pointed somewhere else. configure_file() leaves the stamp alone when the
   # content is unchanged, so re-configuring does not rebuild FujiNet.
@@ -48,7 +60,7 @@ if(WITH_FUJINET)
   add_custom_command(
     OUTPUT "${FUJINET_LIB}"
     COMMAND ${CMAKE_COMMAND} -E env "FUJINET_SRC=${FUJINET_DIR}"
-            "${FUJINET_SCRIPT}"
+            "${BASH_EXECUTABLE}" "${FUJINET_SCRIPT}"
     DEPENDS "${FUJINET_SCRIPT}"
             "${CMAKE_SOURCE_DIR}/tools/fujinet/support/fujinet_desktop_entry.cpp"
             "${FUJINET_STAMP}"
@@ -61,7 +73,7 @@ if(WITH_FUJINET)
   # re-stages and rebuilds, whatever the stamps say.
   add_custom_target(fujinet-runtime-refresh
     COMMAND ${CMAKE_COMMAND} -E env "FUJINET_SRC=${FUJINET_DIR}" "FN_REFRESH=1"
-            "${FUJINET_SCRIPT}"
+            "${BASH_EXECUTABLE}" "${FUJINET_SCRIPT}"
     COMMENT "Re-staging and rebuilding the FujiNet runtime"
     USES_TERMINAL
     VERBATIM)
