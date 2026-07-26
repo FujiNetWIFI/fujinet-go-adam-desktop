@@ -19,9 +19,15 @@ set(GNOME_SOURCES
   debugger/dbg_window.c
 )
 
+set(GNOME_APP_ID online.fujinet.go.adam.gnome)
+
 add_executable(fujinet-go-adam-gnome ${GNOME_SOURCES})
 target_link_libraries(fujinet-go-adam-gnome PRIVATE adamsession PkgConfig::ADW)
 target_compile_options(fujinet-go-adam-gnome PRIVATE -Wall -Wextra)
+target_compile_definitions(fujinet-go-adam-gnome PRIVATE
+  ADAM_APP_ID="${GNOME_APP_ID}"
+  # Uninstalled runs fall back to the in-tree icon theme (see adam_icon_name).
+  ADAM_SOURCE_ICON_DIR="${CMAKE_SOURCE_DIR}/data/icons")
 
 if(WITH_WEBVIEW)
   pkg_check_modules(WEBKIT IMPORTED_TARGET webkitgtk-6.0)
@@ -34,7 +40,21 @@ if(WITH_WEBVIEW)
 endif()
 
 install(TARGETS fujinet-go-adam-gnome RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES data/online.fujinet.go.adam.gnome.desktop
+install(FILES data/${GNOME_APP_ID}.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-install(FILES data/online.fujinet.go.adam.gnome.metainfo.xml
+install(FILES data/${GNOME_APP_ID}.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+
+# Catch a malformed launcher at build time rather than after installing.
+find_program(DESKTOP_FILE_VALIDATE desktop-file-validate)
+if(DESKTOP_FILE_VALIDATE)
+  add_test(NAME desktop_entry_gnome
+           COMMAND ${DESKTOP_FILE_VALIDATE}
+                   "${CMAKE_CURRENT_SOURCE_DIR}/data/${GNOME_APP_ID}.desktop")
+endif()
+find_program(APPSTREAMCLI appstreamcli)
+if(APPSTREAMCLI)
+  add_test(NAME metainfo_gnome
+           COMMAND ${APPSTREAMCLI} validate --no-net --pedantic
+                   "${CMAKE_CURRENT_SOURCE_DIR}/data/${GNOME_APP_ID}.metainfo.xml")
+endif()

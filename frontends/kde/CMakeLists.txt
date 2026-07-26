@@ -24,7 +24,7 @@ target_link_libraries(fujinet-go-adam-kde PRIVATE
   adamsession Qt6::Widgets Qt6::OpenGLWidgets)
 target_compile_options(fujinet-go-adam-kde PRIVATE -Wall -Wextra)
 target_compile_definitions(fujinet-go-adam-kde PRIVATE
-  ADAM_ICON_FILE="${CMAKE_SOURCE_DIR}/data/icons/fujinet-go-adam.png")
+  ADAM_ICON_FILE="${CMAKE_SOURCE_DIR}/data/icons/hicolor/256x256/apps/fujinet-go-adam.png")
 
 if(WITH_WEBVIEW)
   find_package(Qt6 COMPONENTS WebEngineWidgets QUIET)
@@ -36,6 +36,23 @@ if(WITH_WEBVIEW)
   endif()
 endif()
 
+set(KDE_APP_ID online.fujinet.go.adam.kde)
+
 install(TARGETS fujinet-go-adam-kde RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES data/online.fujinet.go.adam.kde.desktop
+install(FILES data/${KDE_APP_ID}.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES data/${KDE_APP_ID}.metainfo.xml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+
+find_program(DESKTOP_FILE_VALIDATE desktop-file-validate)
+if(DESKTOP_FILE_VALIDATE)
+  add_test(NAME desktop_entry_kde
+           COMMAND ${DESKTOP_FILE_VALIDATE}
+                   "${CMAKE_CURRENT_SOURCE_DIR}/data/${KDE_APP_ID}.desktop")
+endif()
+find_program(APPSTREAMCLI appstreamcli)
+if(APPSTREAMCLI)
+  add_test(NAME metainfo_kde
+           COMMAND ${APPSTREAMCLI} validate --no-net --pedantic
+                   "${CMAKE_CURRENT_SOURCE_DIR}/data/${KDE_APP_ID}.metainfo.xml")
+endif()

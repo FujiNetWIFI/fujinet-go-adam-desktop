@@ -12,6 +12,28 @@
 
 static adamsession *g_session;
 
+/* The installed icons are named after the desktop-entry id. Running straight
+ * out of the build tree there is nothing installed to look up, so point the
+ * icon theme at the in-tree artwork (named for the project, not the id) and
+ * report that name instead. */
+const char *adam_icon_name(void)
+{
+    static const char *name;
+    GtkIconTheme *theme;
+
+    if (name)
+        return name;
+
+    name = ADAM_APP_ID;
+    theme = gtk_icon_theme_get_for_display(gdk_display_get_default());
+    if (theme && !gtk_icon_theme_has_icon(theme, name)) {
+        gtk_icon_theme_add_search_path(theme, ADAM_SOURCE_ICON_DIR);
+        if (gtk_icon_theme_has_icon(theme, "fujinet-go-adam"))
+            name = "fujinet-go-adam";
+    }
+    return name;
+}
+
 static void on_activate(AdwApplication *app, gpointer user_data)
 {
     GtkWindow *win;
@@ -38,7 +60,7 @@ static void on_activate(AdwApplication *app, gpointer user_data)
     }
 
     win = GTK_WINDOW(adam_window_new(app, g_session));
-    gtk_window_set_icon_name(win, "online.fujinet.go.adam.gnome");
+    gtk_window_set_icon_name(win, adam_icon_name());
     gtk_window_present(win);
 }
 
@@ -55,7 +77,7 @@ static void on_shutdown(GApplication *app, gpointer user_data)
 int main(int argc, char *argv[])
 {
     g_autoptr(AdwApplication) app = adw_application_new(
-        "online.fujinet.go.adam.gnome", G_APPLICATION_DEFAULT_FLAGS);
+        ADAM_APP_ID, G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(on_activate), NULL);
     g_signal_connect(app, "shutdown", G_CALLBACK(on_shutdown), NULL);
     return g_application_run(G_APPLICATION(app), argc, argv);

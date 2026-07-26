@@ -22,10 +22,12 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #include "adamsession.h"
+#include "debugger/dbg_window.h"
 #include "resource.h"
 
 #define FB_W ADAMSESSION_FB_WIDTH
@@ -354,12 +356,7 @@ static void show_fujinet_log(HINSTANCE inst)
 
 static void open_debugger(void)
 {
-    /* The native Win32 debugger window is a follow-up; the shared engine
-     * beneath it is already portable. */
-    MessageBoxA(g_hwnd,
-                "The native Windows debugger is still in progress.\n"
-                "Use the GNOME, KDE, or macOS build for debugging today.",
-                "Debugger", MB_ICONINFORMATION);
+    adam_debugger_show(g_hwnd, g_session);
 }
 
 /* ---- fullscreen ---------------------------------------------------------- */
@@ -530,7 +527,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     g_present_run = 1;
     pthread_create(&g_present_thread, NULL, present_main, NULL);
 
+    if (getenv("ADAM_OPEN_DEBUGGER"))
+        open_debugger();
+
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+        /* The debugger's F5/F7/F8 accelerators get first refusal while its
+         * window (or one of its fields) has the focus. */
+        if (adam_debugger_pretranslate(&msg))
+            continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }

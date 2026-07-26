@@ -17,7 +17,7 @@ Every target is a **native frontend** built from one shared core:
 | GNOME | GTK4 + libadwaita (+ WebKitGTK) | `fujinet-go-adam-gnome` | complete |
 | KDE | Qt6 Widgets (+ QtWebEngine) | `fujinet-go-adam-kde` | complete |
 | macOS | AppKit (+ WKWebView) | `FujiNet Go Adam.app` | complete (incl. debugger + bundled FujiNet) |
-| Windows | Win32 (GDI + DwmFlush) | `fujinet-go-adam-windows.exe` | app complete; debugger + FujiNet DLL pending; CI-built, needs Windows testers |
+| Windows | Win32 (GDI + DwmFlush) | `fujinet-go-adam-windows.exe` | app + debugger complete; FujiNet DLL pending; CI-built, needs Windows testers |
 
 The maintainer develops on Linux without Mac or Windows hardware: those
 builds are compiled and tested on CI's macOS and Windows runners (each
@@ -55,7 +55,8 @@ banks, sprites (with SAT decode), and palette.
 
 Keys: `F5` pause/continue · `F7` step into · `F8` step over ·
 `Shift+F8` step out · click a disassembly line to toggle a breakpoint.
-`ADAM_OPEN_DEBUGGER=1` opens the debugger at launch.
+`ADAM_OPEN_DEBUGGER=1` opens the debugger at launch. Available in every
+frontend — GTK, Qt, AppKit and Win32 — over the one shared engine.
 
 ## Building (Linux)
 
@@ -65,22 +66,36 @@ Widgets/OpenGLWidgets (+ WebEngine, optional). Frontends are
 found-or-skipped; `-DFRONTEND=gnome|kde|all` selects explicitly and
 `-DWITH_WEBVIEW=OFF` swaps the embedded web UI for the system browser.
 
+There is nothing to fetch or stage by hand:
+
+```sh
+git clone https://github.com/FujiNetWIFI/fujinet-go-adam-desktop
+cd fujinet-go-adam-desktop
+cmake -B build-all -G Ninja
+cmake --build build-all      # first build also builds FujiNet: a few minutes
+ctest --test-dir build-all
+./build-all/frontends/gnome/fujinet-go-adam-gnome   # or …-kde
+```
+
+What that does for you:
+
 1. **System ROMs**: bundled in `tools/adamcore/roms/` (public domain; see
    COMPLIANCE.md) and embedded into the binaries at build time.
-2. **adamcore sources**: staged automatically at configure time from
-   `~/Workspace/adamcore` (override with `ADAMCORE_SRC=…`).
-3. **FujiNet runtime** (optional but the point of the app):
-   `./tools/fujinet/build-fujinet-desktop.sh` builds `libfujinet.so` and
-   the runtime tree from a local fujinet-pc-adam checkout
-   (`FUJINET_SRC=…` to override) into `tools/fujinet/work/out/`.
-4. Build and test:
+2. **adamcore sources**: the `third_party/adamcore` submodule is fetched at
+   configure time (however the tree was obtained — clone, tarball or IDE
+   source copy) and staged into `core/adamcore-generated/`.
+3. **FujiNet runtime**: the `third_party/fujinet-firmware` submodule is
+   fetched and built into `tools/fujinet/work/out/` (`libfujinet.so` plus
+   the runtime tree) as part of the normal build, then installed with the
+   app. `-DWITH_FUJINET=OFF` builds the bare emulator instead.
 
-   ```sh
-   cmake -B build-all -G Ninja
-   cmake --build build-all
-   ctest --test-dir build-all
-   ./build-all/frontends/gnome/fujinet-go-adam-gnome   # or …-kde
-   ```
+Both dependencies are pinned in `cmake/Dependencies.cmake`. To build
+against working checkouts of your own, point the build at them:
+`cmake -B build -DADAMCORE_SRC=~/Workspace/adamcore
+-DFUJINET_SRC=~/Workspace/fujinet-pc-adam`; add `-DADAMCORE_RESTAGE=ON` to
+pick up adamcore edits, and `cmake --build build --target
+fujinet-runtime-refresh` to re-stage and rebuild FujiNet after editing its
+sources.
 
 On first start the app provisions `~/.local/share/fujinet-go-adam/fujinet`
 (fnconfig.ini, `data/`, `SD/`) from the build output or the installed
@@ -89,8 +104,7 @@ libdir, or the dev build output.
 
 ### Installing
 
-Select the frontend at configure time and install (build the FujiNet
-runtime first so it gets installed alongside):
+Select the frontend at configure time and install:
 
 ```sh
 cmake -B build-gnome -G Ninja -DFRONTEND=gnome   # or kde, or all
@@ -98,7 +112,7 @@ cmake --build build-gnome
 sudo cmake --install build-gnome
 ```
 
-This installs the binary, desktop entry, icon, and the FujiNet runtime
+This installs the binary, desktop entry, icons, and the FujiNet runtime
 (`libfujinet.so` into `<prefix>/lib/fujinet-go-adam`, the pristine
 runtime tree into `<prefix>/share/fujinet-go-adam/fujinet`). For a
 sudo-free user install add `-DCMAKE_INSTALL_PREFIX=$HOME/.local` at
@@ -117,10 +131,12 @@ lines), `FUJINET_WEBUI_BIND=addr:port` (web UI bind, default
 
 ```sh
 brew install cmake ninja sdl3
-git clone https://github.com/tschak909/adamcore.git ~/Workspace/adamcore
 cmake -B build -G Ninja && cmake --build build
 open "build/frontends/macos/FujiNet Go Adam.app"
 ```
+
+The build fetches its dependencies and builds `libfujinet.dylib` into the
+app bundle (`Contents/Frameworks`) along with the runtime tree.
 
 Or skip building: every CI run uploads a ready-to-run
 `FujiNet-Go-Adam-macos` app-bundle artifact with SDL statically linked
@@ -135,31 +151,35 @@ dependency-free `.exe`):
 
 ```sh
 pacman -S --needed git mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,python,SDL3}
-git clone https://github.com/tschak909/adamcore.git ~/Workspace/adamcore
 cmake -B build -G Ninja && cmake --build build
 ./build/frontends/windows/fujinet-go-adam-windows.exe
 ```
 
 Every CI run also uploads a ready-to-run `FujiNet-Go-Adam-windows`
-artifact. FujiNet itself (the `fujinet.dll` runtime) and the native
-debugger window are not wired up on Windows yet, so the app currently
-boots and runs the machine standalone; the display, input, gamepads,
-media import, and menus are all in place.
+artifact. The display, input, gamepads, media import, menus and the native
+debugger window (F12) are all in place; FujiNet itself (the `fujinet.dll`
+runtime) is not wired up on Windows yet — `WITH_FUJINET` defaults to `OFF`
+there — so the app boots and runs the machine standalone.
 
-(`ADAMCORE_SRC=/path/to/adamcore` overrides the default checkout
-location.) The FujiNet runtime build for macOS (`libfujinet.dylib`) is not
-scripted yet; the app runs without it, minus the FujiNet drive.
+Windows changes are also cross-compiled (and smoke-tested under wine) from
+Linux with the checked-in toolchain file; see the header comments in
+`cmake/toolchains/mingw-w64.cmake`.
 
 ### Flatpak
 
-`packaging/flatpak/online.fujinet.go.adam.gnome.yml` builds the GNOME app
-from the local tree (stage adamcore, drop in ROMs, and build the FujiNet
-runtime first — see the manifest's header comments):
+`build-aux/flatpak/online.fujinet.go.adam.gnome.yml` builds the GNOME app
+with everything it needs (SDL3, mbedTLS, adamcore, the FujiNet firmware)
+declared as sources, so it needs no preparation and no network access
+during the build itself:
 
 ```sh
 flatpak-builder --user --install --force-clean build-flatpak \
-    packaging/flatpak/online.fujinet.go.adam.gnome.yml
+    build-aux/flatpak/online.fujinet.go.adam.gnome.yml
+flatpak run online.fujinet.go.adam.gnome
 ```
+
+This is also the manifest GNOME Builder picks up: open the project and
+press Run.
 
 ## Repository layout
 
@@ -167,10 +187,19 @@ flatpak-builder --user --install --force-clean build-flatpak \
 core/                 libadamsession: session, audio/gamepad (SDL3),
                       FujiNet runtime control, settings, debugger engine
 core/adamcore-generated/  staged adamcore sources (git-ignored)
+third_party/          pinned dependency submodules (adamcore,
+                      fujinet-firmware), fetched by the build
+cmake/                dependency provisioning, adamcore staging,
+                      FujiNet runtime build
 frontends/gnome/      GTK4/libadwaita app
 frontends/kde/        Qt6 app
+frontends/macos/      AppKit app
+frontends/windows/    Win32 app
+build-aux/flatpak/    flatpak manifest (also used by GNOME Builder)
+data/icons/           launcher artwork + rendered hicolor icon set
 tools/adamcore/       staging + ROM embedding
 tools/fujinet/        libfujinet.so build (desktop entry wrapper, patches)
+tools/icons/          icon rendering
 tools/symbols/        EOS/OS7 debug-symbol extraction
 ```
 

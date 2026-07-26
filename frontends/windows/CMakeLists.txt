@@ -10,12 +10,17 @@ enable_language(RC)
 
 add_executable(fujinet-go-adam-windows WIN32
   main.c
+  debugger/dbg_window.c
   resource.rc
 )
 target_link_libraries(fujinet-go-adam-windows PRIVATE
   adamsession
-  gdi32 user32 comdlg32 dwmapi shell32
+  gdi32 user32 comdlg32 dwmapi shell32 comctl32
 )
+# The debugger window talks to the shared engine (core/include/adamdebug.h),
+# which pulls in adamcore's debug header from the staged tree.
+target_include_directories(fujinet-go-adam-windows PRIVATE
+  "${CMAKE_SOURCE_DIR}/core/adamcore-generated/include")
 target_compile_options(fujinet-go-adam-windows PRIVATE -Wall -Wextra)
 
 # Bundle the MinGW runtime statically so the .exe has no loose DLL deps.

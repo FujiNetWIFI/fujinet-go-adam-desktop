@@ -1,0 +1,35 @@
+Done (this pass)
+----------------
+
+* adamcore + fujinet-firmware are pinned submodules under third_party/,
+  provided automatically at configure time (submodule init, or a clone when
+  the tree has no git metadata). ADAMCORE_SRC / FUJINET_SRC still override.
+* The FujiNet runtime is built by the normal build (WITH_FUJINET, default ON
+  off-Windows) into tools/fujinet/work/out and installed with the app.
+* cmake --install: GNUInstallDirs is now included at the top level, so the
+  desktop entry lands in <prefix>/share/applications instead of /applications.
+* GNOME launcher + icons: hicolor 16..512 rendered from the launcher art
+  (tools/icons/make-icons.py), plus desktop-entry and AppStream validation
+  tests.
+* Flatpak: manifest moved to build-aux/flatpak/ (where GNOME Builder looks)
+  and builds SDL3 + mbedTLS + the python webui deps + adamcore +
+  fujinet-firmware from declared sources -- verified end to end, and the app
+  installs as "FujiNet Go Adam" with its icon.
+* Windows: net_win32.c (adamcore's net.h over Winsock) so the MinGW build
+  links at all; native Win32 debugger window (F12); app manifest for
+  comctl32 v6 + per-monitor DPI; checked-in mingw-w64 cross toolchain.
+
+Next
+----
+
+* FujiNet on Windows: build fujinet-pc as fujinet.dll under MinGW (export
+  list instead of the version script, mbedTLS/OpenSSL from MSYS2), then flip
+  WITH_FUJINET on for WIN32.
+* Upstream the Winsock backend into adamcore (core/src/net_win32.c is a
+  stand-in; core/CMakeLists.txt prefers an adamcore-provided one).
+* Windows debugger polish: the VDP page does not resize its views, and
+  register/memory editing is Enter-to-apply only.
+* Flathub submission (AppStream metadata is in place); flatpak for the KDE
+  frontend.
+* Watch the new CI jobs: linux now builds FujiNet, and the flatpak job is
+  new (bilelmoussaoui/flatpak-github-actions image, gnome-48).

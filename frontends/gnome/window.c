@@ -288,7 +288,7 @@ static void action_about(GSimpleAction *action, GVariant *param,
     adw_show_about_dialog(
         GTK_WIDGET(self),
         "application-name", "FujiNet Go Adam",
-        "application-icon", "online.fujinet.go.adam.gnome",
+        "application-icon", adam_icon_name(),
         "developer-name", "Thomas Cherryhomes",
         "version", "0.1.0",
         "license-type", GTK_LICENSE_GPL_3_0,

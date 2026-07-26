@@ -40,6 +40,20 @@ else()
   )
 endif()
 
+# adamcore's socket helpers (net.h): POSIX sockets everywhere, Winsock on
+# Windows. The upstream core carries only the POSIX backend so far, so the
+# desktop tree supplies the Windows one -- and steps aside as soon as an
+# adamcore checkout brings its own.
+if(WIN32)
+  if(EXISTS "${ADAMCORE_GEN}/src/net_win32.c")
+    set(ADAMCORE_NET_SRC "${ADAMCORE_GEN}/src/net_win32.c")
+  else()
+    set(ADAMCORE_NET_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/net_win32.c")
+  endif()
+else()
+  set(ADAMCORE_NET_SRC "${ADAMCORE_GEN}/src/net_posix.c")
+endif()
+
 add_library(adamsession STATIC
   # staged adamcore
   ${ADAMCORE_GEN}/src/z80.c
@@ -49,7 +63,7 @@ add_library(adamsession STATIC
   ${ADAMCORE_GEN}/src/cart.c
   ${ADAMCORE_GEN}/src/adamnet.c
   ${ADAMCORE_GEN}/src/boip.c
-  ${ADAMCORE_GEN}/src/net_posix.c
+  ${ADAMCORE_NET_SRC}
   ${ADAMCORE_GEN}/src/palette.c
   ${ADAMCORE_GEN}/src/debug.c
   # session layer
@@ -86,7 +100,9 @@ target_compile_definitions(adamsession PRIVATE
 # Windows the FujiNet library is loaded via LoadLibrary (see dynlib.h) and
 # the math functions live in the CRT.
 target_link_libraries(adamsession PUBLIC SDL3::SDL3 Threads::Threads)
-if(NOT WIN32)
+if(WIN32)
+  target_link_libraries(adamsession PUBLIC ws2_32)
+else()
   target_link_libraries(adamsession PUBLIC dl m)
 endif()
 set_property(TARGET adamsession PROPERTY POSITION_INDEPENDENT_CODE ON)
@@ -126,3 +142,14 @@ add_test(NAME gamepad_map COMMAND gamepad_map_test)
 add_test(NAME vdp_decode COMMAND vdp_decode_test)
 set_tests_properties(boot_smoke debug_boot gamepad_map
                      PROPERTIES SKIP_RETURN_CODE 77)
+
+# On Windows the tests that start threads otherwise need libwinpthread-1.dll
+# beside them, which only happens to be true inside an MSYS2 shell. Link the
+# runtime statically (as the frontend does) so the test exes run anywhere --
+# on a bare Windows box, or under wine when cross-compiling.
+if(WIN32)
+  foreach(_t input_test boot_smoke dasm_test debug_boot_test
+             gamepad_probe gamepad_map_test vdp_decode_test)
+    target_link_options(${_t} PRIVATE -static -static-libgcc -static-libstdc++)
+  endforeach()
+endif()

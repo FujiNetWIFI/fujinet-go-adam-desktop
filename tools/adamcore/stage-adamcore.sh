@@ -2,29 +2,23 @@
 # Stage the adamcore emulator sources for the desktop build. adamcore is the
 # clean-room GPLv3 ADAM/ColecoVision core; see COMPLIANCE.md.
 #
-# Sources come from a git checkout of the adamcore repository, pinned by
-# SOURCE_COMMIT (override the location with ADAMCORE_SRC=/path). The staged
-# tree is git-ignored. The system ROMs live in tools/adamcore/roms and are
-# embedded into the binaries by the build (tools/adamcore/embed-roms.py).
+# Sources come from the third_party/adamcore submodule, pinned in
+# cmake/Dependencies.cmake (override the location with ADAMCORE_SRC=/path to
+# build against a working checkout). The build normally calls this itself; run
+# it by hand only to refresh the staged tree. The staged tree is git-ignored.
+# The system ROMs live in tools/adamcore/roms and are embedded into the
+# binaries by the build (tools/adamcore/embed-roms.py).
 set -euo pipefail
 
-SOURCE_BRANCH="main"
-SOURCE_COMMIT="HEAD"
-
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SRC="${ADAMCORE_SRC:-$HOME/Workspace/adamcore}"
+SRC="${ADAMCORE_SRC:-$ROOT/third_party/adamcore}"
 GEN="$ROOT/core/adamcore-generated"
 
 if [ ! -f "$SRC/src/machine.c" ]; then
-    echo "error: adamcore sources not found at $SRC (set ADAMCORE_SRC=)" >&2
+    echo "error: adamcore sources not found at $SRC" >&2
+    echo "       run: git submodule update --init third_party/adamcore" >&2
+    echo "       (or set ADAMCORE_SRC=/path/to/adamcore)" >&2
     exit 1
-fi
-
-if [ "$SOURCE_COMMIT" != "HEAD" ]; then
-    have="$(git -C "$SRC" rev-parse HEAD)"
-    if [ "$have" != "$SOURCE_COMMIT" ]; then
-        echo "warning: adamcore checkout at $have, pinned $SOURCE_COMMIT" >&2
-    fi
 fi
 
 echo "Staging adamcore from $SRC"

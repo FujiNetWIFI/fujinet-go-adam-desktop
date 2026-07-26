@@ -1,0 +1,6 @@
+[submodule "third_party/adamcore"]
+	path = third_party/adamcore
+	url = https://github.com/tschak909/adamcore
+[submodule "third_party/fujinet-firmware"]
+	path = third_party/fujinet-firmware
+	url = https://github.com/FujiNetWIFI/fujinet-firmware

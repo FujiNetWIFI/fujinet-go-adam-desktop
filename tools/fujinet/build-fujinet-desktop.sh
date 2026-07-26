@@ -20,17 +20,28 @@
 #
 # fnconfig.ini is forced to [BOIP] enabled=1 host=127.0.0.1 port=65216 so the
 # in-process runtime connects to the in-process emulator on loopback.
+#
+# The build system runs this itself (cmake/FujiNetRuntime.cmake); running it
+# by hand is only needed to refresh an existing tree. Environment knobs:
+#   FUJINET_SRC=/path   build from that checkout instead of the submodule
+#   FN_REFRESH=1        re-stage + re-patch even if the staged tree is current
+#   FN_CLEAN=1          throw the FujiNet build directory away first
+#   FN_PATCH_ONLY=1     stage and patch, but do not build
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+ROOT_DIR=$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)
 SUPPORT_DIR="${SCRIPT_DIR}/support"
 WORK_ROOT="${SCRIPT_DIR}/work"
 CLONE_DIR="${WORK_ROOT}/fujinet-firmware"
 OUT_DIR="${WORK_ROOT}/out"
+STAGE_STAMP="${WORK_ROOT}/.staged-from"
 
-# Local fujinet-pc-adam checkout (override with FUJINET_SRC=/path ...).
-FUJINET_SRC="${FUJINET_SRC:-${HOME}/Workspace/fujinet-pc-adam}"
+# FujiNet sources: the third_party/fujinet-firmware submodule, pinned in
+# cmake/Dependencies.cmake (override with FUJINET_SRC=/path to build from a
+# working checkout).
+FUJINET_SRC="${FUJINET_SRC:-${ROOT_DIR}/third_party/fujinet-firmware}"
 PC_TARGET="ADAM"
 
 # The shared library's name follows the host platform (the same script
@@ -41,23 +52,44 @@ case "$(uname -s)" in
     *)      LIBNAME="libfujinet.so" ;;
 esac
 
-# FujiNet needs mbedTLS 3.x (Homebrew's formula moved to 4.x, which drops
-# the legacy mbedtls/md5.h fujinet includes). On macOS, build the same
-# pinned 3.6.5 the Android app uses -- with pthread threading enabled, as
-# fujinet drives TLS from several threads -- unless the caller already
-# points MBEDTLS_ROOT_DIR at a 3.x install.
+# FujiNet needs mbedTLS 3.x (Homebrew's formula moved to 4.x, and mbedTLS 4
+# drops the legacy mbedtls/md5.h fujinet includes). Use a system install when
+# it is a usable 3.x -- Linux distributions ship one -- and otherwise build
+# the same pinned 3.6.5 the Android app uses, with pthread threading enabled
+# because fujinet drives TLS from several threads. MBEDTLS_ROOT_DIR from the
+# caller always wins (that is how the flatpak passes /app).
 MBEDTLS_TAG="mbedtls-3.6.5"
 MBEDTLS_SOURCE_DIR="${WORK_ROOT}/mbedtls-src"
 MBEDTLS_BUILD_DIR="${WORK_ROOT}/mbedtls-build"
 MBEDTLS_INSTALL_DIR="${WORK_ROOT}/mbedtls-install"
 
-build_mbedtls_darwin() {
-    [[ "$(uname -s)" == "Darwin" ]] || return 0
+# A system mbedTLS is usable when it is 3.x (still has mbedtls/md5.h) and
+# ships the static libraries fujinet links against.
+system_mbedtls_usable() {
+    local inc lib
+    for inc in /usr/include /usr/local/include; do
+        [[ -f "${inc}/mbedtls/build_info.h" ]] || continue
+        grep -q '#define MBEDTLS_VERSION_MAJOR *3' "${inc}/mbedtls/build_info.h" \
+            || continue
+        [[ -f "${inc}/mbedtls/md5.h" ]] || continue
+        for lib in /usr/lib /usr/lib64 /usr/local/lib "/usr/lib/$(uname -m)-linux-gnu"; do
+            [[ -f "${lib}/libmbedtls.a" ]] && return 0
+        done
+    done
+    return 1
+}
+
+ensure_mbedtls() {
     if [[ -n "${MBEDTLS_ROOT_DIR:-}" ]]; then
         echo "Using caller-provided MBEDTLS_ROOT_DIR=${MBEDTLS_ROOT_DIR}"
         return 0
     fi
+    if [[ "$(uname -s)" != "Darwin" ]] && system_mbedtls_usable; then
+        echo "Using the system mbedTLS 3.x"
+        return 0
+    fi
     if [[ ! -f "${MBEDTLS_INSTALL_DIR}/lib/libmbedtls.a" ]]; then
+        echo "Building pinned mbedTLS ${MBEDTLS_TAG}"
         rm -rf "${MBEDTLS_SOURCE_DIR}" "${MBEDTLS_BUILD_DIR}" "${MBEDTLS_INSTALL_DIR}"
         git clone --depth 1 --branch "${MBEDTLS_TAG}" --recurse-submodules \
             --shallow-submodules https://github.com/Mbed-TLS/mbedtls.git \
@@ -80,6 +112,7 @@ PY
             -DCMAKE_INSTALL_PREFIX="${MBEDTLS_INSTALL_DIR}" \
             -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF \
             -DMBEDTLS_FATAL_WARNINGS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DUSE_STATIC_MBEDTLS_LIBRARY=ON -DUSE_SHARED_MBEDTLS_LIBRARY=OFF \
             -DLINK_WITH_PTHREAD=ON
         cmake --build "${MBEDTLS_BUILD_DIR}" --parallel
@@ -93,18 +126,50 @@ fail() {
     exit 1
 }
 
+# Identity of what is staged: the source commit (or, for a dirty working
+# checkout, its content-free "unknown" marker) plus this script and the entry
+# wrapper, since both rewrite the staged tree.
+stage_identity() {
+    local commit
+    commit="$(git -C "${FUJINET_SRC}" rev-parse HEAD 2>/dev/null || echo local)"
+    if [[ -n "$(git -C "${FUJINET_SRC}" status --porcelain 2>/dev/null)" ]]; then
+        commit="${commit}-dirty-$(date +%s)"
+    fi
+    printf '%s %s %s\n' "${FUJINET_SRC}" "${commit}" \
+        "$(cat "${BASH_SOURCE[0]}" "${SUPPORT_DIR}/fujinet_desktop_entry.cpp" \
+           | cksum | cut -d' ' -f1)"
+}
+
+staging_current() {
+    [[ -f "${CLONE_DIR}/build.sh" && -f "${STAGE_STAMP}" ]] || return 1
+    [[ "${FN_REFRESH:-0}" -eq 1 ]] && return 1
+    [[ "$(cat "${STAGE_STAMP}")" == "$(stage_identity)" ]]
+}
+
 stage_local_source() {
-    [[ -d "${FUJINET_SRC}" ]] || fail "fujinet-pc-adam source not found at ${FUJINET_SRC} (set FUJINET_SRC)"
+    [[ -d "${FUJINET_SRC}" ]] || fail \
+        "FujiNet sources not found at ${FUJINET_SRC}
+       run: git submodule update --init third_party/fujinet-firmware
+       (or set FUJINET_SRC=/path/to/fujinet-firmware)"
     [[ -f "${FUJINET_SRC}/build.sh" ]] || fail "build.sh missing under ${FUJINET_SRC}"
 
-    rm -rf "${CLONE_DIR}"
     mkdir -p "${WORK_ROOT}"
-    # Keep .git: the fujinet build derives build_version.h from git describe
-    # (and unlike the Android script's python, the native path treats a git
-    # failure as fatal).
-    rsync -a --delete \
-        --exclude 'build/' --exclude 'dist/' \
-        "${FUJINET_SRC}/" "${CLONE_DIR}/"
+    # The FujiNet build directory lives inside the staged tree and is excluded
+    # from the sync (and so protected from --delete), which is what keeps
+    # rebuilds incremental. Keep .git: the fujinet build derives
+    # build_version.h from git describe (and unlike the Android script's
+    # python, the native path treats a git failure as fatal).
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete \
+            --exclude 'build/' --exclude 'dist/' \
+            "${FUJINET_SRC}/" "${CLONE_DIR}/"
+    else
+        # No rsync (the flatpak SDK, for one): copy through tar, preserving
+        # the existing build directory.
+        mkdir -p "${CLONE_DIR}"
+        tar -C "${FUJINET_SRC}" --exclude=./build --exclude=./dist -cf - . \
+            | tar -C "${CLONE_DIR}" -xf -
+    fi
 }
 
 apply_desktop_patches() {
@@ -114,6 +179,14 @@ import sys
 
 clone_dir = Path(sys.argv[1])
 support_dir = Path(sys.argv[2])
+
+def write_if_changed(path, text):
+    """Leave the mtime alone when nothing moved, so the FujiNet build stays
+    incremental across re-stagings."""
+    if path.exists() and path.read_text() == text:
+        return
+    path.write_text(text)
+
 
 def patch(rel, transforms, required=True):
     p = clone_dir / rel
@@ -130,7 +203,7 @@ def patch(rel, transforms, required=True):
                 continue
             sys.exit(f"build-fujinet-desktop.sh: patch anchor not found in {rel}:\n---\n{old[:200]}\n---")
         text = text.replace(old, new, count)
-    p.write_text(text)
+    write_if_changed(p, text)
 
 # --- build.sh: inject the embedded-build cmake args (getopts rejects any
 # --- pass-through -D flags, so they ride an environment variable) ---------
@@ -155,6 +228,14 @@ patch("build.sh", [
     (
         '    cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"\n',
         '    cmake .. "${CMAKE_EXTRA_ARGS[@]}" -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"\n',
+    ),
+    # PC_BUILD is never assigned anywhere in build.sh -- the guard was meant
+    # to be PC_TARGET -- so a PC build always tries to pip-install
+    # PlatformIO, which it does not need and which fails outright in a build
+    # sandbox with no network.
+    (
+        'if [ -z "${PC_BUILD}" ] ; then\n',
+        'if [ -z "${PC_TARGET}" ] ; then\n',
     ),
     (
         '    cmake "$GEN_CMD" .. -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"\n',
@@ -373,21 +454,24 @@ patch("lib/compat/pc_rtos/pc_rtos.cpp", [
 # --- Drop in the desktop entry-point wrapper + export map -----------------
 desktop_dir = clone_dir / "desktop"
 desktop_dir.mkdir(exist_ok=True)
-(desktop_dir / "fujinet_desktop_entry.cpp").write_text(
-    (support_dir / "fujinet_desktop_entry.cpp").read_text()
+write_if_changed(
+    desktop_dir / "fujinet_desktop_entry.cpp",
+    (support_dir / "fujinet_desktop_entry.cpp").read_text(),
 )
-(desktop_dir / "fujinet_embedded.map").write_text(
+write_if_changed(
+    desktop_dir / "fujinet_embedded.map",
     "{\n"
     "  global:\n"
     "    fujinet_desktop_*;\n"
     "    fujinet_android_*;\n"
     "  local: *;\n"
-    "};\n"
+    "};\n",
 )
 # macOS equivalent (C symbols carry a leading underscore in Mach-O).
-(desktop_dir / "fujinet_embedded.exp").write_text(
+write_if_changed(
+    desktop_dir / "fujinet_embedded.exp",
     "_fujinet_desktop_*\n"
-    "_fujinet_android_*\n"
+    "_fujinet_android_*\n",
 )
 PY
 }
@@ -436,22 +520,67 @@ collect_outputs() {
         > "${OUT_DIR}/upstream-commit.txt"
 }
 
+# The FujiNet build wants pyyaml and jinja2 in a virtualenv, and installs
+# them with pip when they are missing -- which needs the network, and fails
+# inside a build sandbox. Creating the venv here with --system-site-packages
+# lets distribution-provided modules satisfy the check; pip only runs when
+# the modules really are absent.
+prepare_python_env() {
+    export VENV_ROOT="${VENV_ROOT:-${WORK_ROOT}/venv}"
+    if [[ ! -f "${VENV_ROOT}/bin/activate" ]]; then
+        python3 -m venv --system-site-packages "${VENV_ROOT}" \
+            || fail "could not create the python virtualenv at ${VENV_ROOT}"
+    fi
+}
+
 # --------------------------------------------------------------------------
 mkdir -p "${WORK_ROOT}"
-stage_local_source
-apply_desktop_patches
-apply_local_patch_files
+if staging_current; then
+    echo "FujiNet sources already staged from ${FUJINET_SRC} (FN_REFRESH=1 to re-stage)"
+else
+    rm -f "${STAGE_STAMP}"
+    stage_local_source
+    apply_desktop_patches
+    apply_local_patch_files
+    stage_identity > "${STAGE_STAMP}"
+fi
 
 if [[ "${FN_PATCH_ONLY:-0}" -eq 1 ]]; then
     echo "FN_PATCH_ONLY: staged and patched ${CLONE_DIR}; skipping build."
     exit 0
 fi
 
-build_mbedtls_darwin
+ensure_mbedtls
+prepare_python_env
+
+# Ninja and a parallel build where available: the stock invocation is a
+# single-threaded make, which turns this into a coffee break.
+if [[ -z "${CMAKE_GENERATOR:-}" ]] && command -v ninja >/dev/null 2>&1; then
+    export CMAKE_GENERATOR="Ninja"
+fi
+if [[ -z "${CMAKE_BUILD_PARALLEL_LEVEL:-}" ]]; then
+    export CMAKE_BUILD_PARALLEL_LEVEL="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+fi
+
+# -c (clean) only on request: the staged build directory is preserved across
+# runs so rebuilds are incremental.
+BUILD_FLAGS="-p"
+[[ "${FN_CLEAN:-0}" -eq 1 ]] && BUILD_FLAGS="-cp"
+
+# ... except a build directory made by a different generator, which cmake
+# refuses to reuse.
+FN_CACHE="${CLONE_DIR}/build/CMakeCache.txt"
+if [[ -f "${FN_CACHE}" ]]; then
+    have_gen="$(sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${FN_CACHE}")"
+    if [[ "${have_gen}" != "${CMAKE_GENERATOR:-Unix Makefiles}" ]]; then
+        echo "FujiNet build directory was made with '${have_gen}'; rebuilding clean"
+        BUILD_FLAGS="-cp"
+    fi
+fi
 
 (
     cd "${CLONE_DIR}"
-    FUJINET_EMBEDDED=1 bash ./build.sh -cp "${PC_TARGET}"
+    FUJINET_EMBEDDED=1 bash ./build.sh "${BUILD_FLAGS}" "${PC_TARGET}"
 )
 
 collect_outputs

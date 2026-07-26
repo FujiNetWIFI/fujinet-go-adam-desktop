@@ -1,11 +1,17 @@
 # Builds the shared core and every frontend the runner's platform supports,
 # then runs the test suite -- including the real boot tests, since the
-# public-domain system ROMs are bundled in the repository. adamcore is
-# cloned from its own repository and staged via ADAMCORE_SRC.
+# public-domain system ROMs are bundled in the repository.
+#
+# The jobs deliberately do nothing to prepare the tree beyond checking it
+# out: the build fetches its pinned dependencies (adamcore, the FujiNet
+# firmware) and builds the FujiNet runtime itself, so CI exercises exactly
+# what someone cloning the repository gets.
 #
 # The macOS job is the substitute for owning a Mac: it proves the core,
 # the compat shims, and the AppKit frontend build and pass tests on real
-# Apple hardware, and uploads a ready-to-run app bundle.
+# Apple hardware, and uploads a ready-to-run app bundle. The flatpak job
+# proves the "no preparation at all" path end to end, since everything the
+# sandbox build needs has to be declared in the manifest.
 
 name: CI
 
@@ -19,15 +25,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: tschak909/adamcore
-          path: adamcore-src
       - name: Install toolkit dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libgtk-4-dev libadwaita-1-dev \
-            libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev
+            libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev \
+            libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev
       - name: Build and install SDL3
         run: |
           git clone --depth 1 --branch release-3.2.16 \
@@ -36,27 +39,27 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
           cmake --build sdl3-src/build
           sudo cmake --install sdl3-src/build
+      # No dependency preparation: this is the plain user path. The build
+      # fetches adamcore + the FujiNet firmware and builds libfujinet.so.
+      # (Ubuntu's mbedTLS is 2.x, so the FujiNet build compiles the pinned
+      # 3.6.5 for itself.)
       - name: Configure
         run: cmake -B build -G Ninja
-        env:
-          ADAMCORE_SRC: ${{ github.workspace }}/adamcore-src
       - name: Build
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Verify the FujiNet runtime was built and exports its entry points
+        run: |
+          LIB=tools/fujinet/work/out/libfujinet.so
+          test -f "$LIB" || { echo "::error::$LIB missing"; exit 1; }
+          nm -D --defined-only "$LIB" | grep -q fujinet_desktop_start_runtime \
+            || { echo "::error::entry points not exported"; exit 1; }
 
   macos:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: tschak909/adamcore
-          path: adamcore-src
-      - uses: actions/checkout@v4
-        with:
-          repository: FujiNetWIFI/fujinet-firmware
-          path: fujinet-src
       - name: Install dependencies
         run: brew install ninja
       # SDL3 is linked STATICALLY on macOS so the shipped .app has no
@@ -72,19 +75,12 @@ jobs:
             -DSDL_TEST_LIBRARY=OFF
           cmake --build sdl3-src/build
           sudo cmake --install sdl3-src/build
-      # Built BEFORE configure so the frontend's bundle rule sees the
-      # dylib. This is what puts FujiNet inside the shipped Mac app.
-      - name: Build FujiNet runtime (libfujinet.dylib)
-        run: |
-          pip3 install --break-system-packages pyyaml jinja2 \
-            || pip3 install pyyaml jinja2 || true
-          ./tools/fujinet/build-fujinet-desktop.sh
-        env:
-          FUJINET_SRC: ${{ github.workspace }}/fujinet-src
+      # No dependency preparation: configure fetches adamcore and the
+      # FujiNet firmware, and the build compiles libfujinet.dylib (with its
+      # own pinned mbedTLS, since Homebrew's is 4.x) and packs it into the
+      # app bundle.
       - name: Configure
         run: cmake -B build -G Ninja
-        env:
-          ADAMCORE_SRC: ${{ github.workspace }}/adamcore-src
       - name: Build
         run: cmake --build build
       - name: Test
@@ -128,10 +124,6 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: tschak909/adamcore
-          path: adamcore-src
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -154,10 +146,10 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/ucrt64
           cmake --build sdl3-src/build
           cmake --install sdl3-src/build
+      # WITH_FUJINET defaults to OFF on Windows (no fujinet.dll yet), so
+      # this only fetches and builds adamcore + the frontend.
       - name: Configure
         run: cmake -B build -G Ninja
-        env:
-          ADAMCORE_SRC: ${{ github.workspace }}/adamcore-src
       - name: Build
         run: cmake --build build
       - name: Test
@@ -180,3 +172,19 @@ jobs:
         with:
           name: FujiNet-Go-Adam-windows
           path: build/frontends/windows/fujinet-go-adam-windows.exe
+
+  # The flatpak is the distributable Linux build, and the strictest test of
+  # the "clone and build" promise: the sandbox has no network during the
+  # build, so anything the manifest does not declare is simply absent.
+  flatpak:
+    runs-on: ubuntu-24.04
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: FujiNet-Go-Adam.flatpak
+          manifest-path: build-aux/flatpak/online.fujinet.go.adam.gnome.yml
+          cache-key: flatpak-builder-${{ github.sha }}

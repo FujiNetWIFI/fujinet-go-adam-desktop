@@ -5,13 +5,16 @@ component it builds from is GPLv3-compatible:
 
 | Component | Origin | License |
 |---|---|---|
-| adamcore (staged into `core/adamcore-generated/`) | github: clean-room ADAM/CV core by Thomas Cherryhomes (see its PROVENANCE.md) | GPL-3.0-or-later |
+| adamcore (submodule `third_party/adamcore`, staged into `core/adamcore-generated/`) | [tschak909/adamcore](https://github.com/tschak909/adamcore): clean-room ADAM/CV core by Thomas Cherryhomes (see its PROVENANCE.md) | GPL-3.0-or-later |
 | libadamsession, frontends, debugger engine, tools | this repository | GPL-3.0-or-later |
-| fujinet-firmware / fujinet-pc (ADAM), built as `libfujinet.so` | local fujinet-pc-adam checkout | GPL-3.0 |
+| fujinet-firmware / fujinet-pc (ADAM), built as `libfujinet.so` | submodule `third_party/fujinet-firmware` ([FujiNetWIFI/fujinet-firmware](https://github.com/FujiNetWIFI/fujinet-firmware)) | GPL-3.0 |
 | Bundled by the FujiNet build: libssh, libsmb2, libnfs | fujinet-firmware components | LGPL-2.1 |
 | Bundled by the FujiNet build: expat (system), cJSON, mongoose | fujinet-firmware components / system | MIT / GPL-2.0 dual (mongoose) |
-| mbedTLS (system libraries) | distribution packages | Apache-2.0 |
+| mbedTLS (system libraries, or 3.6.5 built from source when the system has no usable 3.x) | distribution packages / [Mbed-TLS/mbedtls](https://github.com/Mbed-TLS/mbedtls) | Apache-2.0 |
 | SDL3, GTK4/libadwaita/WebKitGTK, Qt6 | system libraries, dynamically linked | zlib / LGPL |
+
+Both submodules are pinned to exact commits in `cmake/Dependencies.cmake`;
+the flatpak manifest repeats the same commits as declared sources.
 
 ## Deliberately not used
 

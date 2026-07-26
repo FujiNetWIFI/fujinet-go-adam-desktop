@@ -27,12 +27,15 @@ target_link_libraries(fujinet-go-adam-macos PRIVATE
 )
 target_compile_options(fujinet-go-adam-macos PRIVATE -Wall -Wextra -fobjc-arc)
 
-# When the FujiNet runtime has been built (tools/fujinet/
-# build-fujinet-desktop.sh on a Mac, as CI does), pack it into the bundle:
-# the dylib into Contents/Frameworks, the pristine runtime tree into
-# Contents/Resources/fujinet (main.m hands both paths to the session).
-set(FUJINET_OUT "${CMAKE_SOURCE_DIR}/tools/fujinet/work/out")
-if(EXISTS "${FUJINET_OUT}/libfujinet.dylib")
+# Pack the FujiNet runtime into the bundle: the dylib into
+# Contents/Frameworks, the pristine runtime tree into
+# Contents/Resources/fujinet (main.m hands both paths to the session). The
+# runtime is built by this same build (cmake/FujiNetRuntime.cmake), so wait
+# for it; a tree left by an earlier manual run of the script is used as-is.
+if(TARGET fujinet-runtime)
+  add_dependencies(fujinet-go-adam-macos fujinet-runtime)
+endif()
+if(TARGET fujinet-runtime OR EXISTS "${FUJINET_OUT}/libfujinet.dylib")
   add_custom_command(TARGET fujinet-go-adam-macos POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_CONTENT_DIR:fujinet-go-adam-macos>/Frameworks"
@@ -47,5 +50,5 @@ if(EXISTS "${FUJINET_OUT}/libfujinet.dylib")
     COMMENT "Bundling the FujiNet runtime into the app"
   )
 else()
-  message(STATUS "macOS frontend: no libfujinet.dylib in tools/fujinet/work/out; the app will run without FujiNet")
+  message(STATUS "macOS frontend: FujiNet runtime disabled; the app will run without FujiNet")
 endif()

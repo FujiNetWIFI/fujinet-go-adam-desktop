@@ -16,6 +16,10 @@ G_DECLARE_FINAL_TYPE(AdamWindow, adam_window, ADAM, WINDOW, AdwApplicationWindow
 
 GtkWidget *adam_window_new(AdwApplication *app, adamsession *session);
 
+/* Themed icon name for this app: the desktop-entry id once installed, the
+ * in-tree artwork when running uninstalled (defined in main.c). */
+const char *adam_icon_name(void);
+
 /* Stop and relaunch the session with the current persisted settings (used
  * after preferences / cartridge changes). */
 void adam_window_restart_session(AdamWindow *self);
