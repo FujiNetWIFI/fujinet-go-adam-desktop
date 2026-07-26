@@ -22,6 +22,20 @@
     <category>Game</category>
     <category>Emulator</category>
   </categories>
+  <screenshots>
+    <screenshot type="default">
+      <caption>A Coleco ADAM running with FujiNet built in</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/main/data/screenshots/kde/1_main.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The built-in debugger</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/main/data/screenshots/kde/2_debugger.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Preferences</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/main/data/screenshots/kde/3_preferences.png</image>
+    </screenshot>
+  </screenshots>
   <url type="homepage">https://fujinet.online/</url>
   <url type="bugtracker">https://github.com/FujiNetWIFI/fujinet-go-adam-desktop/issues</url>
   <developer id="online.fujinet">
@@ -29,6 +43,18 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.0" date="2026-07-26">
+      <description>
+        <p>
+          Fixes disk and data-pack loading: a drive now reports itself busy
+          while it positions on a block and serves the data when the guest
+          asks again, as the hardware does. Titles whose loaders rely on
+          that exchange — Donkey Kong Super Game among them — previously
+          stopped part-way and drew their play screen with the wrong
+          graphics mode and colours.
+        </p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-07-26">
       <description>
         <p>

@@ -43,6 +43,18 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.0" date="2026-07-26">
+      <description>
+        <p>
+          Fixes disk and data-pack loading: a drive now reports itself busy
+          while it positions on a block and serves the data when the guest
+          asks again, as the hardware does. Titles whose loaders rely on
+          that exchange — Donkey Kong Super Game among them — previously
+          stopped part-way and drew their play screen with the wrong
+          graphics mode and colours.
+        </p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-07-26">
       <description>
         <p>
