@@ -32,6 +32,17 @@ jobs:
             libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev \
             libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev \
             python3-venv python3-yaml python3-jinja2 desktop-file-utils
+      # SDL 3.4 aborts its configure when an X11 extension it enables by
+      # default has no headers (3.2 quietly disabled them), so name the whole
+      # set rather than depend on what the runner image happens to ship:
+      # Xcursor, Xdbe/Xsync/Xshape (libxext), Xinput2, Xfixes, Xrandr,
+      # XScrnSaver, XTest.
+      - name: Install SDL3 build dependencies
+        run: |
+          sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libxrandr-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev libdecor-0-dev libasound2-dev \
+            libpulse-dev libudev-dev libdbus-1-dev
       - name: Build and install SDL3
         run: |
           git clone --depth 1 --branch release-3.4.12 \
