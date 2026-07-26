@@ -156,19 +156,40 @@ stage_local_source() {
     mkdir -p "${WORK_ROOT}"
     # The FujiNet build directory lives inside the staged tree and is excluded
     # from the sync (and so protected from --delete), which is what keeps
-    # rebuilds incremental. Keep .git: the fujinet build derives
-    # build_version.h from git describe (and unlike the Android script's
-    # python, the native path treats a git failure as fatal).
+    # rebuilds incremental.
+    #
+    # .git is left behind deliberately. A submodule checkout's .git is a
+    # gitlink *file* holding a path relative to the superproject, which points
+    # nowhere once copied here -- and the fujinet build's version step treats
+    # a failing `git describe` as fatal. The version is passed in through the
+    # environment instead (see fujinet_version_env), so the staged tree needs
+    # no git metadata at all.
     if command -v rsync >/dev/null 2>&1; then
         rsync -a --delete \
-            --exclude 'build/' --exclude 'dist/' \
+            --exclude 'build/' --exclude 'dist/' --exclude '.git' \
             "${FUJINET_SRC}/" "${CLONE_DIR}/"
     else
         # No rsync (the flatpak SDK, for one): copy through tar, preserving
         # the existing build directory.
         mkdir -p "${CLONE_DIR}"
-        tar -C "${FUJINET_SRC}" --exclude=./build --exclude=./dist -cf - . \
-            | tar -C "${CLONE_DIR}" -xf -
+        tar -C "${FUJINET_SRC}" --exclude=./build --exclude=./dist \
+            --exclude=./.git -cf - . | tar -C "${CLONE_DIR}" -xf -
+    fi
+    rm -rf "${CLONE_DIR}/.git"
+}
+
+# The staged copy has no git metadata, so hand the fujinet version scripts
+# the description of the real source checkout (they prefer these over
+# calling git; see the version_common.py patch below).
+fujinet_version_env() {
+    export FUJINET_BUILD_DESCRIBE="$(
+        git -C "${FUJINET_SRC}" describe --always HEAD 2>/dev/null || true)"
+    export FUJINET_BUILD_SHA="$(
+        git -C "${FUJINET_SRC}" rev-parse HEAD 2>/dev/null || true)"
+    if [[ -n "$(git -C "${FUJINET_SRC}" status --porcelain 2>/dev/null)" ]]; then
+        export FUJINET_BUILD_DIRTY=1
+    else
+        export FUJINET_BUILD_DIRTY=0
     fi
 }
 
@@ -248,6 +269,66 @@ patch("build.sh", [
     (
         '    cmake "$GEN_CMD" .. -DFUJINET_TARGET=$PC_TARGET -DCMAKE_BUILD_TYPE=$BUILD_TYPE "$@"\n',
         '    cmake "$GEN_CMD" .. "${CMAKE_EXTRA_ARGS[@]}" -DFUJINET_TARGET=$PC_TARGET -DCMAKE_BUILD_TYPE=$BUILD_TYPE "$@"\n',
+    ),
+])
+
+# --- version_common.py: work without git ----------------------------------
+# The staged tree carries no .git (see stage_local_source), and a submodule
+# checkout could not provide usable metadata here anyway. Two of the helpers
+# let a git failure escape and abort the build; make them fall back, and let
+# the caller pass the real description through the environment so the version
+# banner still names the upstream commit.
+patch("version_common.py", [
+    (
+        'import re\n'
+        'import subprocess\n',
+        'import os\n'
+        'import re\n'
+        'import subprocess\n',
+    ),
+    (
+        'def run_command(cmd):\n'
+        '  return subprocess.check_output(cmd, universal_newlines=True).strip()\n',
+        'def run_command(cmd):\n'
+        '  return subprocess.check_output(cmd, universal_newlines=True).strip()\n'
+        '\n'
+        'def _try_command(cmd, default=""):\n'
+        '  """[fujinet-go-adam-desktop] git-optional variant: the desktop build\n'
+        '  compiles a staged copy of this tree that has no git metadata."""\n'
+        '  try:\n'
+        '    return run_command(cmd)\n'
+        '  except (FileNotFoundError, subprocess.CalledProcessError):\n'
+        '    return default\n',
+    ),
+    (
+        '  files = run_command(["git", "diff", "--name-only"]).split("\\n")\n',
+        '  # Without .git here, plain git would answer for whatever repository\n'
+        '  # encloses the staged tree; the caller reports the real state.\n'
+        '  dirty = os.environ.get("FUJINET_BUILD_DIRTY")\n'
+        '  if dirty is not None:\n'
+        '    return ["(source checkout)"] if dirty == "1" else []\n'
+        '  files = _try_command(["git", "diff", "--name-only"]).split("\\n")\n',
+    ),
+    (
+        '  """raw output of `git describe --always HEAD`"""\n'
+        '  return run_command(["git", "describe", "--always", "HEAD"])\n',
+        '  """raw output of `git describe --always HEAD`"""\n'
+        '  env = os.environ.get("FUJINET_BUILD_DESCRIBE")\n'
+        '  if env:\n'
+        '    return env\n'
+        '  # "0000000" parses as the no-reachable-tag case rather than\n'
+        '  # dropping an unparsable string into the version string.\n'
+        '  return _try_command(["git", "describe", "--always", "HEAD"],\n'
+        '                      "0000000")\n',
+    ),
+    (
+        'def get_commit_sha(short=False):\n'
+        '  cmd = ["git", "rev-parse", "HEAD"]\n',
+        'def get_commit_sha(short=False):\n'
+        '  env = os.environ.get("FUJINET_BUILD_SHA")\n'
+        '  if env:\n'
+        '    return env[:7] if short else env\n'
+        '  cmd = ["git", "rev-parse", "HEAD"]\n',
     ),
 ])
 
@@ -552,6 +633,7 @@ fi
 
 ensure_mbedtls
 prepare_python_env
+fujinet_version_env
 
 # Ninja and a parallel build where available: the stock invocation is a
 # single-threaded make, which turns this into a coffee break.

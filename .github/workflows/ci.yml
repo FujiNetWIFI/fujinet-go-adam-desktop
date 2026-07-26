@@ -30,7 +30,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libgtk-4-dev libadwaita-1-dev \
             libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev \
-            libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev
+            libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev \
+            python3-venv python3-yaml python3-jinja2 desktop-file-utils
       - name: Build and install SDL3
         run: |
           git clone --depth 1 --branch release-3.2.16 \
@@ -178,13 +179,30 @@ jobs:
   # build, so anything the manifest does not declare is simply absent.
   flatpak:
     runs-on: ubuntu-24.04
-    container:
-      image: bilelmoussaoui/flatpak-github-actions:gnome-48
-      options: --privileged
     steps:
       - uses: actions/checkout@v4
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+      # Driven directly rather than through the usual community container
+      # image: its tags stop at gnome-47, and this manifest targets 48.
+      - name: Install flatpak and the GNOME 48 runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub \
+            org.gnome.Platform//48 org.gnome.Sdk//48
+      # --disable-rofiles-fuse: FUSE is not available to the runner user.
+      - name: Build the flatpak
+        run: |
+          flatpak-builder --user --disable-rofiles-fuse --force-clean \
+            --repo=flatpak-repo build-flatpak \
+            build-aux/flatpak/online.fujinet.go.adam.gnome.yml
+      - name: Bundle
+        run: |
+          flatpak build-bundle flatpak-repo FujiNet-Go-Adam.flatpak \
+            online.fujinet.go.adam.gnome master
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
         with:
-          bundle: FujiNet-Go-Adam.flatpak
-          manifest-path: build-aux/flatpak/online.fujinet.go.adam.gnome.yml
-          cache-key: flatpak-builder-${{ github.sha }}
+          name: FujiNet-Go-Adam-flatpak
+          path: FujiNet-Go-Adam.flatpak
