@@ -48,9 +48,15 @@ PC_TARGET="ADAM"
 # builds libfujinet.dylib on macOS, e.g. in the CI job that assembles the
 # Mac app bundle).
 case "$(uname -s)" in
-    Darwin) LIBNAME="libfujinet.dylib" ;;
-    *)      LIBNAME="libfujinet.so" ;;
+    Darwin)            LIBNAME="libfujinet.dylib" ;;
+    MINGW*|MSYS*|CYGWIN*) LIBNAME="fujinet.dll" ;;
+    *)                 LIBNAME="libfujinet.so" ;;
 esac
+# Cross-compiling for Windows from another host (see
+# cmake/toolchains/mingw-w64.cmake) produces the same DLL.
+if [[ "${FUJINET_CMAKE_ARGS:-}" == *mingw* ]]; then
+    LIBNAME="fujinet.dll"
+fi
 
 # FujiNet needs mbedTLS 3.x (Homebrew's formula moved to 4.x, and mbedTLS 4
 # drops the legacy mbedtls/md5.h fujinet includes). Use a system install when
@@ -67,12 +73,16 @@ MBEDTLS_INSTALL_DIR="${WORK_ROOT}/mbedtls-install"
 # ships the static libraries fujinet links against.
 system_mbedtls_usable() {
     local inc lib
-    for inc in /usr/include /usr/local/include; do
+    # ${MSYSTEM_PREFIX} covers MSYS2 (/ucrt64, /mingw64, ...), where the
+    # pacman mbedtls package is the natural choice.
+    for inc in "${MSYSTEM_PREFIX:-/nonexistent}/include" /usr/include \
+               /usr/local/include; do
         [[ -f "${inc}/mbedtls/build_info.h" ]] || continue
         grep -q '#define MBEDTLS_VERSION_MAJOR *3' "${inc}/mbedtls/build_info.h" \
             || continue
         [[ -f "${inc}/mbedtls/md5.h" ]] || continue
-        for lib in /usr/lib /usr/lib64 /usr/local/lib "/usr/lib/$(uname -m)-linux-gnu"; do
+        for lib in "${MSYSTEM_PREFIX:-/nonexistent}/lib" /usr/lib /usr/lib64 \
+                   /usr/local/lib "/usr/lib/$(uname -m)-linux-gnu"; do
             [[ -f "${lib}/libmbedtls.a" ]] && return 0
         done
     done
@@ -244,6 +254,10 @@ patch("build.sh", [
         '      CMAKE_EXTRA_ARGS+=("-DOPENSSL_USE_STATIC_LIBS=ON")\n'
         '    fi\n'
         '  fi\n'
+        '  # Caller-supplied cmake arguments (a cross toolchain file, for one).\n'
+        '  if [ -n "${FUJINET_CMAKE_ARGS:-}" ] ; then\n'
+        '    CMAKE_EXTRA_ARGS+=(${FUJINET_CMAKE_ARGS})\n'
+        '  fi\n'
         '  GEN_CMD=""\n',
     ),
     (
@@ -269,6 +283,46 @@ patch("build.sh", [
     (
         '    cmake "$GEN_CMD" .. -DFUJINET_TARGET=$PC_TARGET -DCMAKE_BUILD_TYPE=$BUILD_TYPE "$@"\n',
         '    cmake "$GEN_CMD" .. "${CMAKE_EXTRA_ARGS[@]}" -DFUJINET_TARGET=$PC_TARGET -DCMAKE_BUILD_TYPE=$BUILD_TYPE "$@"\n',
+    ),
+])
+
+# --- portability: setenv() is POSIX; MSVCRT spells it _putenv_s ------------
+# Same shim the firmware already uses in lib/clock/Clock.cpp -- the ADAM
+# Fuji device just has not been built for Windows before.
+patch("lib/device/adamnet/adamFuji.cpp", [
+    (
+        '#include "adamFuji.h"\n',
+        '#include "adamFuji.h"\n'
+        '\n'
+        '#ifdef _WIN32\n'
+        '#include <cstdlib>\n'
+        '#define setenv(name, value, overwrite) _putenv_s(name, value)\n'
+        '#define unsetenv(name) _putenv_s(name, "")\n'
+        '#endif /* _WIN32 */\n',
+    ),
+])
+
+# --- portability: `uint` is a glibc/BSD spelling, absent on MinGW ----------
+# The ADAM modem device is the only place the PC build uses it; it has
+# simply never been compiled for Windows before.
+patch("lib/device/adamnet/modem.h", [
+    (
+        '    uint modemBaud = 300;',
+        '    unsigned int modemBaud = 300;',
+    ),
+])
+
+# --- dist target: no ldd DLL harvesting for the embedded Windows build ----
+# The stock Windows "dist" target copies the executable's dependent DLLs by
+# parsing ldd output. The embedded library links its runtimes statically and
+# has nothing to harvest -- and ldd is not meaningful when cross-compiling
+# from another host anyway, so take the plain (cmake-only) branch instead.
+patch("fujinet_pc.cmake", [
+    (
+        '# "dist" target\n'
+        'if(CMAKE_SYSTEM_NAME STREQUAL "Windows")\n',
+        '# "dist" target\n'
+        'if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT FUJINET_EMBEDDED)\n',
     ),
 ])
 
@@ -350,6 +404,15 @@ patch("fujinet_pc.cmake", [
         '    if(APPLE)\n'
         '        target_link_options(fujinet PRIVATE\n'
         '            "-Wl,-exported_symbols_list,${CMAKE_SOURCE_DIR}/desktop/fujinet_embedded.exp")\n'
+        '    elseif(WIN32)\n'
+        '        # PE has no version script: the entry points carry\n'
+        '        # __declspec(dllexport) instead, which also turns off\n'
+        '        # MinGW auto-export. No "lib" prefix -- the host looks for\n'
+        '        # fujinet.dll -- and the MinGW/C++ runtimes are linked in so\n'
+        '        # the DLL can be loaded from anywhere without loose deps.\n'
+        '        set_target_properties(fujinet PROPERTIES PREFIX "")\n'
+        '        target_link_options(fujinet PRIVATE\n'
+        '            -static -static-libgcc -static-libstdc++)\n'
         '    else()\n'
         '        target_link_options(fujinet PRIVATE\n'
         '            "-Wl,--version-script=${CMAKE_SOURCE_DIR}/desktop/fujinet_embedded.map")\n'
@@ -682,11 +745,21 @@ if [[ -f "${FN_CACHE}" ]]; then
     fi
 fi
 
+# ... or for a different target: one work tree serves the host build and a
+# cross build (mingw-w64), and their caches are not interchangeable.
+TARGET_KEY_FILE="${CLONE_DIR}/build/.adam-target"
+TARGET_KEY="${LIBNAME}|${FUJINET_CMAKE_ARGS:-}|${MBEDTLS_ROOT_DIR:-}"
+if [[ -f "${TARGET_KEY_FILE}" && "$(cat "${TARGET_KEY_FILE}")" != "${TARGET_KEY}" ]]; then
+    echo "FujiNet build directory was made for another target; rebuilding clean"
+    BUILD_FLAGS="-cp"
+fi
+
 (
     cd "${CLONE_DIR}"
     FUJINET_EMBEDDED=1 bash ./build.sh "${BUILD_FLAGS}" "${PC_TARGET}"
 )
 
+printf '%s' "${TARGET_KEY}" > "${TARGET_KEY_FILE}"
 collect_outputs
 
 echo "FujiNet ADAM desktop runtime outputs:"

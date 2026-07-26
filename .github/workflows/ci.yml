@@ -146,6 +146,12 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-yaml
+            mingw-w64-ucrt-x86_64-python-jinja
+            mingw-w64-ucrt-x86_64-mbedtls
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-expat
+            mingw-w64-ucrt-x86_64-zlib
       # Static SDL3 (as on macOS) so the shipped .exe has no loose DLL
       # dependencies -- not even SDL3.dll or the MinGW runtime.
       - name: Build and install static SDL3
@@ -158,14 +164,20 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/ucrt64
           cmake --build sdl3-src/build
           cmake --install sdl3-src/build
-      # WITH_FUJINET defaults to OFF on Windows (no fujinet.dll yet), so
-      # this only fetches and builds adamcore + the frontend.
+      # Builds the frontend *and* fujinet.dll (mbedTLS/OpenSSL/expat/zlib
+      # come from the packages above).
       - name: Configure
         run: cmake -B build -G Ninja
       - name: Build
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Verify the FujiNet DLL was built and exports its entry points
+        run: |
+          DLL=tools/fujinet/work/out/fujinet.dll
+          test -f "$DLL" || { echo "::error::$DLL missing"; exit 1; }
+          objdump -p "$DLL" | grep -q fujinet_desktop_start_runtime \
+            || { echo "::error::entry points not exported"; exit 1; }
       # A self-contained GUI exe depends only on system DLLs (kernel32,
       # user32, gdi32, ...); anything under the MSYS prefix means a runtime
       # DLL leaked in and the exe would not run on a clean Windows box.
@@ -179,11 +191,23 @@ jobs:
             echo "::error::MSYS/MinGW runtime DLL leaked into the exe"
             exit 1
           fi
-      - name: Upload exe
+      # The artifact is the folder you copy and run: the exe, fujinet.dll
+      # beside it (where the session looks first), and the pristine FujiNet
+      # runtime tree it provisions from on first start.
+      - name: Stage the app folder
+        run: |
+          mkdir -p dist/FujiNet-Go-Adam/fujinet
+          cp build/frontends/windows/fujinet-go-adam-windows.exe \
+             dist/FujiNet-Go-Adam/
+          cp tools/fujinet/work/out/fujinet.dll dist/FujiNet-Go-Adam/
+          cp tools/fujinet/work/out/fnconfig.ini dist/FujiNet-Go-Adam/fujinet/
+          cp -r tools/fujinet/work/out/data tools/fujinet/work/out/SD \
+             dist/FujiNet-Go-Adam/fujinet/
+      - name: Upload app folder
         uses: actions/upload-artifact@v5
         with:
           name: FujiNet-Go-Adam-windows
-          path: build/frontends/windows/fujinet-go-adam-windows.exe
+          path: dist/FujiNet-Go-Adam
 
   # The flatpak is the distributable Linux build, and the strictest test of
   # the "clone and build" promise: the sandbox has no network during the

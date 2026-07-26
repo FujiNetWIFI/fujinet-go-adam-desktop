@@ -19,16 +19,31 @@ Done (this pass)
   links at all; native Win32 debugger window (F12); app manifest for
   comctl32 v6 + per-monitor DPI; checked-in mingw-w64 cross toolchain.
 
+Done (Windows FujiNet pass)
+---------------------------
+
+* fujinet.dll builds under MinGW and the Win32 app runs the same in-process
+  FujiNet as the other platforms: __declspec(dllexport) entry points instead
+  of a version script, PREFIX "" so the file is fujinet.dll, the MinGW/C++
+  runtimes linked in (the DLL imports only system DLLs), and Windows shims
+  for the entry wrapper's pipe()/setenv()/thread naming.
+* Two upstream portability gaps patched in the staged tree and worth sending
+  upstream: `uint` in lib/device/adamnet/modem.h, and adamFuji.cpp calling
+  setenv() (the same _putenv_s shim lib/clock/Clock.cpp already carries).
+* The session looks for the runtime beside the executable first, which is
+  the layout the Windows artifact ships (exe + fujinet.dll + fujinet/).
+* Verified by cross-compiling from Linux and running under wine: CONFIG
+  boots over BoIP (Winsock), web UI up, 63 blocks served.
+
 Next
 ----
 
-* FujiNet on Windows: build fujinet-pc as fujinet.dll under MinGW (export
-  list instead of the version script, mbedTLS/OpenSSL from MSYS2), then flip
-  WITH_FUJINET on for WIN32.
 * Upstream the Winsock backend into adamcore (core/src/net_win32.c is a
   stand-in; core/CMakeLists.txt prefers an adamcore-provided one).
 * Windows debugger polish: the VDP page does not resize its views, and
   register/memory editing is Enter-to-apply only.
+* Windows: no SAM audio path yet (the DLL exports it; the frontend does not
+  pump it), and no gamepad-specific testing on real hardware.
 * Flathub submission (AppStream metadata is in place); flatpak for the KDE
   frontend.
 * Keep the versions current: the flatpak targets the GNOME 49 runtime (48

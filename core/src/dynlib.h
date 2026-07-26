@@ -21,7 +21,11 @@ typedef HMODULE adam_dynlib;
 
 static inline adam_dynlib adam_dynlib_open(const char *path)
 {
-    return LoadLibraryA(path);
+    /* LOAD_WITH_ALTERED_SEARCH_PATH puts the library's own directory ahead
+     * of the process directory when resolving *its* dependencies, so a
+     * fujinet.dll installed next to its support DLLs loads wherever it
+     * lives. */
+    return LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
 }
 
 static inline void *adam_dynlib_sym(adam_dynlib h, const char *name)

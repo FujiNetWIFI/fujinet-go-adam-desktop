@@ -12,18 +12,13 @@
 # The first build takes a few minutes; later ones are incremental. Configure
 # with -DWITH_FUJINET=OFF for a bare emulator build.
 
-if(WIN32)
-  # No embedded FujiNet on Windows yet (the fujinet-pc build has no shared
-  # library target for MinGW); the Win32 frontend runs the emulator alone.
-  set(_fujinet_default OFF)
-else()
-  set(_fujinet_default ON)
-endif()
-option(WITH_FUJINET "Build and bundle the FujiNet runtime" ${_fujinet_default})
+option(WITH_FUJINET "Build and bundle the FujiNet runtime" ON)
 
 set(FUJINET_OUT "${CMAKE_SOURCE_DIR}/tools/fujinet/work/out")
 if(APPLE)
   set(FUJINET_LIB_NAME "libfujinet.dylib")
+elseif(WIN32)
+  set(FUJINET_LIB_NAME "fujinet.dll")
 else()
   set(FUJINET_LIB_NAME "libfujinet.so")
 endif()
@@ -75,12 +70,22 @@ endif()
 # Install the runtime: whatever this build produced, or a tree left by an
 # earlier manual run of the script.
 if(WITH_FUJINET OR EXISTS "${FUJINET_LIB}")
-  install(FILES "${FUJINET_LIB}"
-          DESTINATION ${CMAKE_INSTALL_LIBDIR}/fujinet-go-adam)
-  install(FILES "${FUJINET_OUT}/fnconfig.ini"
-          DESTINATION ${CMAKE_INSTALL_DATADIR}/fujinet-go-adam/fujinet)
-  install(DIRECTORY "${FUJINET_OUT}/data" "${FUJINET_OUT}/SD"
-          DESTINATION ${CMAKE_INSTALL_DATADIR}/fujinet-go-adam/fujinet)
+  if(WIN32)
+    # A Windows install is a folder you copy: fujinet.dll sits beside the
+    # exe (where the session looks first) and the runtime tree beside that.
+    install(FILES "${FUJINET_LIB}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES "${FUJINET_OUT}/fnconfig.ini"
+            DESTINATION ${CMAKE_INSTALL_BINDIR}/fujinet)
+    install(DIRECTORY "${FUJINET_OUT}/data" "${FUJINET_OUT}/SD"
+            DESTINATION ${CMAKE_INSTALL_BINDIR}/fujinet)
+  else()
+    install(FILES "${FUJINET_LIB}"
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/fujinet-go-adam)
+    install(FILES "${FUJINET_OUT}/fnconfig.ini"
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/fujinet-go-adam/fujinet)
+    install(DIRECTORY "${FUJINET_OUT}/data" "${FUJINET_OUT}/SD"
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/fujinet-go-adam/fujinet)
+  endif()
 elseif(NOT WIN32)
   message(STATUS "FujiNet runtime disabled (WITH_FUJINET=OFF); "
                  "the emulator will run without FujiNet")

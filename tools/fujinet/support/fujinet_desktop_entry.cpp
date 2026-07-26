@@ -15,7 +15,13 @@
  */
 
 #include <pthread.h>
+#include <sys/types.h>
 #include <unistd.h>
+
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #include <cstdarg>
 #include <cstdio>
@@ -37,12 +43,36 @@ extern void main_setup(int argc, char* argv[]);
 extern void fn_service_loop(void* param);
 extern void main_shutdown_handler();
 
+/* Export control. ELF and Mach-O builds hand the linker an explicit symbol
+ * list (see build-fujinet-desktop.sh); PE has no equivalent, so the entry
+ * points mark themselves -- which also stops MinGW from auto-exporting every
+ * symbol in the library. */
+#if defined(_WIN32)
+#define FUJINET_ENTRY extern "C" __declspec(dllexport)
+#else
+#define FUJINET_ENTRY extern "C"
+#endif
+
 namespace {
 void set_thread_name(const char* name) {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    /* winpthreads has no portable setname; the debugger names threads by
+     * their entry point instead. */
+    (void)name;
+#elif defined(__APPLE__)
     pthread_setname_np(name);
 #else
     pthread_setname_np(pthread_self(), name);
+#endif
+}
+
+/* POSIX pipe() over the MSVCRT flavour, which wants a buffer size and a
+ * text/binary mode. Binary: the log pump moves bytes, not lines. */
+int fn_make_pipe(int fds[2]) {
+#if defined(_WIN32)
+    return _pipe(fds, 1 << 16, _O_BINARY);
+#else
+    return pipe(fds);
 #endif
 }
 
@@ -301,7 +331,7 @@ void start_log_capture(const std::string& runtime_root) {
     stop_log_capture();
 
     int log_pipe[2];
-    if (pipe(log_pipe) != 0) {
+    if (fn_make_pipe(log_pipe) != 0) {
         host_log("fujinet: unable to create log pipe");
         return;
     }
@@ -372,7 +402,7 @@ void start_log_capture(const std::string& runtime_root) {
 }
 }  // namespace
 
-extern "C" void fujinet_desktop_submit_sam_audio(
+FUJINET_ENTRY void fujinet_desktop_submit_sam_audio(
         const uint8_t* audio,
         int sampleCount,
         int sampleRate
@@ -414,12 +444,12 @@ extern "C" void fujinet_desktop_submit_sam_audio(
 }
 
 /* Alias kept for firmware branches that call the Android submit hook. */
-extern "C" void fujinet_android_submit_sam_audio(
+FUJINET_ENTRY void fujinet_android_submit_sam_audio(
         const uint8_t* audio, int sampleCount, int sampleRate) {
     fujinet_desktop_submit_sam_audio(audio, sampleCount, sampleRate);
 }
 
-extern "C" int fujinet_desktop_read_audio(
+FUJINET_ENTRY int fujinet_desktop_read_audio(
         int16_t* output,
         int maxSamples,
         int outputSampleRate
@@ -467,12 +497,12 @@ extern "C" int fujinet_desktop_read_audio(
     return produced;
 }
 
-extern "C" void fujinet_desktop_clear_audio() {
+FUJINET_ENTRY void fujinet_desktop_clear_audio() {
     std::lock_guard<std::mutex> lock(g_audio_mutex);
     clear_audio_locked();
 }
 
-extern "C" int fujinet_desktop_copy_recent_log(char* output, int maxBytes) {
+FUJINET_ENTRY int fujinet_desktop_copy_recent_log(char* output, int maxBytes) {
     if (output == nullptr || maxBytes <= 0) {
         return 0;
     }
@@ -493,7 +523,7 @@ extern "C" int fujinet_desktop_copy_recent_log(char* output, int maxBytes) {
     return static_cast<int>(copyable);
 }
 
-extern "C" bool fujinet_desktop_start_runtime(
+FUJINET_ENTRY bool fujinet_desktop_start_runtime(
         const char* runtimeRootPath,
         const char* configPath,
         const char* sdPath,
@@ -614,7 +644,7 @@ extern "C" bool fujinet_desktop_start_runtime(
     return false;
 }
 
-extern "C" void fujinet_desktop_stop_runtime() {
+FUJINET_ENTRY void fujinet_desktop_stop_runtime() {
     std::thread runtimeThread;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -640,7 +670,7 @@ extern "C" void fujinet_desktop_stop_runtime() {
     }
 }
 
-extern "C" const char* fujinet_desktop_last_error_message() {
+FUJINET_ENTRY const char* fujinet_desktop_last_error_message() {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_last_error.empty()) {
         return nullptr;

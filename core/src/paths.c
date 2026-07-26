@@ -17,6 +17,10 @@
 
 #include "session_internal.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 /* Compiled-in development fallbacks (set by CMake to paths in the source /
  * build trees) so a git checkout runs without an install step. */
 #ifndef ADAM_DEV_FUJINET_OUT
@@ -28,6 +32,37 @@
 #ifndef ADAM_INSTALL_LIBDIR
 #define ADAM_INSTALL_LIBDIR ""
 #endif
+
+/* Directory holding the running executable, or "" when it cannot be
+ * determined. A Windows install is a folder you copy around -- the exe and
+ * fujinet.dll side by side -- so that folder is the first place to look for
+ * the runtime. Elsewhere the install/dev directories baked in at configure
+ * time answer the question. */
+static const char *exe_dir(void)
+{
+    static char dir[ADAM_PATH_MAX];
+#if defined(_WIN32)
+    static int resolved;
+    char *p;
+
+    if (!resolved) {
+        resolved = 1;
+        if (GetModuleFileNameA(NULL, dir, (DWORD)sizeof(dir)) == 0) {
+            dir[0] = '\0';
+        } else {
+            dir[sizeof(dir) - 1] = '\0';
+            p = strrchr(dir, '\\');
+            if (!p)
+                p = strrchr(dir, '/');
+            if (p)
+                *p = '\0';
+            else
+                dir[0] = '\0';
+        }
+    }
+#endif
+    return dir;
+}
 
 /* mkdir differs: POSIX takes a mode, the Windows CRT does not. */
 static int make_dir(const char *path)
@@ -213,16 +248,19 @@ int paths_provision_fujinet(adamsession *s)
     if (!s->fujinet_lib[0]) {
         static const char *const names[] = {
             "libfujinet.so", "libfujinet.dylib", "fujinet.dll"};
-        static const char *const dirs[] = {ADAM_INSTALL_LIBDIR,
-                                           ADAM_DEV_FUJINET_OUT};
+        const char *const dirs[] = {exe_dir(), ADAM_INSTALL_LIBDIR,
+                                    ADAM_DEV_FUJINET_OUT};
         const size_t nnames = sizeof(names) / sizeof(names[0]);
+        const size_t ndirs = sizeof(dirs) / sizeof(dirs[0]);
         size_t di, ni;
         env = getenv("FUJINET_LIB");
         if (env && is_file(env)) {
             snprintf(s->fujinet_lib, sizeof(s->fujinet_lib), "%s", env);
         } else {
-            for (di = 0; di < 2 && !s->fujinet_lib[0]; di++)
+            for (di = 0; di < ndirs && !s->fujinet_lib[0]; di++)
                 for (ni = 0; ni < nnames && !s->fujinet_lib[0]; ni++) {
+                    if (!dirs[di][0])
+                        continue;
                     snprintf(probe, sizeof(probe), "%s/%s", dirs[di],
                              names[ni]);
                     if (is_file(probe))
@@ -242,6 +280,13 @@ int paths_provision_fujinet(adamsession *s)
                      s->fujinet_src);
             if (is_file(probe))
                 snprintf(src_root, sizeof(src_root), "%s", s->fujinet_src);
+        }
+        /* Beside the executable, the layout a Windows install ships. */
+        if (!src_root[0] && exe_dir()[0]) {
+            snprintf(probe, sizeof(probe), "%s/fujinet/fnconfig.ini",
+                     exe_dir());
+            if (is_file(probe))
+                snprintf(src_root, sizeof(src_root), "%s/fujinet", exe_dir());
         }
         if (!src_root[0]) {
             snprintf(probe, sizeof(probe), "%s/fujinet/fnconfig.ini",

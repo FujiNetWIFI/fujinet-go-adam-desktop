@@ -438,6 +438,13 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_ERASEBKGND:
         return 1; /* paint() clears; avoid flicker */
+    case WM_SIZE:
+        /* A resize only invalidates the newly exposed strips, and BeginPaint
+         * clips the repaint to them -- the rest of the client area would keep
+         * the image blitted at the old size (visible as a ghost after
+         * maximize or F11). Ask for the whole client area instead. */
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
         if (on_keydown(hwnd, wp))
@@ -507,6 +514,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     memset(&wc, 0, sizeof(wc));
     wc.cbSize = sizeof(wc);
+    /* Redraw the whole client area on any size change; the display is
+     * stretched to fit, so a partial repaint leaves stale pixels. */
+    wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);

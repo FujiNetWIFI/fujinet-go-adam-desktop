@@ -17,7 +17,7 @@ Every target is a **native frontend** built from one shared core:
 | GNOME | GTK4 + libadwaita (+ WebKitGTK) | `fujinet-go-adam-gnome` | complete |
 | KDE | Qt6 Widgets (+ QtWebEngine) | `fujinet-go-adam-kde` | complete |
 | macOS | AppKit (+ WKWebView) | `FujiNet Go Adam.app` | complete (incl. debugger + bundled FujiNet) |
-| Windows | Win32 (GDI + DwmFlush) | `fujinet-go-adam-windows.exe` | app + debugger complete; FujiNet DLL pending; CI-built, needs Windows testers |
+| Windows | Win32 (GDI + DwmFlush) | `fujinet-go-adam-windows.exe` | complete (incl. debugger + bundled FujiNet); CI-built, needs Windows testers |
 
 The maintainer develops on Linux without Mac or Windows hardware: those
 builds are compiled and tested on CI's macOS and Windows runners (each
@@ -150,20 +150,24 @@ frontend; SDL3 and the MinGW runtime are linked statically for a
 dependency-free `.exe`):
 
 ```sh
-pacman -S --needed git mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,python,SDL3}
+pacman -S --needed git mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,SDL3} \
+    mingw-w64-ucrt-x86_64-{python,python-yaml,python-jinja} \
+    mingw-w64-ucrt-x86_64-{mbedtls,openssl,expat,zlib}
 cmake -B build -G Ninja && cmake --build build
 ./build/frontends/windows/fujinet-go-adam-windows.exe
 ```
 
-Every CI run also uploads a ready-to-run `FujiNet-Go-Adam-windows`
-artifact. The display, input, gamepads, media import, menus and the native
-debugger window (F12) are all in place; FujiNet itself (the `fujinet.dll`
-runtime) is not wired up on Windows yet — `WITH_FUJINET` defaults to `OFF`
-there — so the app boots and runs the machine standalone.
+The second and third package lines are what FujiNet needs: the app builds
+`fujinet.dll` and runs the same in-process FujiNet as the other platforms
+(`-DWITH_FUJINET=OFF` for a bare emulator build without them).
+
+Every CI run uploads a ready-to-run `FujiNet-Go-Adam-windows` artifact —
+the exe, `fujinet.dll` beside it, and the FujiNet runtime tree in
+`fujinet/`. Copy the folder anywhere and run it.
 
 Windows changes are also cross-compiled (and smoke-tested under wine) from
-Linux with the checked-in toolchain file; see the header comments in
-`cmake/toolchains/mingw-w64.cmake`.
+Linux with the checked-in toolchain file — including `fujinet.dll`; see the
+header comments in `cmake/toolchains/mingw-w64.cmake`.
 
 ### Flatpak
 
