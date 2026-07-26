@@ -293,33 +293,47 @@ jobs:
   # build, so anything the manifest does not declare is simply absent.
   flatpak:
     runs-on: ubuntu-24.04
+    strategy:
+      # Both frontends ship a flatpak; let one finish even if the other
+      # breaks, so a runtime bump on one side does not mask the other.
+      fail-fast: false
+      matrix:
+        include:
+          - frontend: gnome
+            app-id: online.fujinet.go.adam.gnome
+            runtime: org.gnome.Platform//49 org.gnome.Sdk//49
+            bundle: FujiNet-Go-Adam.flatpak
+          - frontend: kde
+            app-id: online.fujinet.go.adam.kde
+            runtime: org.kde.Platform//6.11 org.kde.Sdk//6.11
+            bundle: FujiNet-Go-Adam-kde.flatpak
     steps:
       - uses: actions/checkout@v5
       # Driven directly rather than through the usual community container
-      # image: its tags stop at gnome-47, and this manifest targets 49.
-      - name: Install flatpak and the GNOME 49 runtime
+      # image: its tags stop at gnome-47, and these manifests target GNOME 49
+      # and KDE 6.11.
+      - name: Install flatpak and the ${{ matrix.frontend }} runtime
         run: |
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder
           flatpak remote-add --user --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y --noninteractive flathub \
-            org.gnome.Platform//49 org.gnome.Sdk//49
+          flatpak install --user -y --noninteractive flathub ${{ matrix.runtime }}
       # --disable-rofiles-fuse: FUSE is not available to the runner user.
       - name: Build the flatpak
         run: |
           flatpak-builder --user --disable-rofiles-fuse --force-clean \
             --repo=flatpak-repo build-flatpak \
-            build-aux/flatpak/online.fujinet.go.adam.gnome.yml
+            build-aux/flatpak/${{ matrix.app-id }}.yml
       - name: Bundle
         run: |
-          flatpak build-bundle flatpak-repo FujiNet-Go-Adam.flatpak \
-            online.fujinet.go.adam.gnome master
+          flatpak build-bundle flatpak-repo ${{ matrix.bundle }} \
+            ${{ matrix.app-id }} master
       - name: Upload bundle
         uses: actions/upload-artifact@v5
         with:
-          name: FujiNet-Go-Adam-flatpak
-          path: FujiNet-Go-Adam.flatpak
+          name: FujiNet-Go-Adam-flatpak-${{ matrix.frontend }}
+          path: ${{ matrix.bundle }}
 
   # Publishing. Runs only for v* tags, and only once every platform has
   # built and tested: the release carries exactly the binaries CI verified.
@@ -361,8 +375,10 @@ jobs:
           mkdir -p release
           cp "artifacts/FujiNet-Go-Adam-macos/FujiNet-Go-Adam-macos.zip" \
              "release/FujiNet-Go-Adam-${tag}-macos.zip"
-          cp "artifacts/FujiNet-Go-Adam-flatpak/FujiNet-Go-Adam.flatpak" \
+          cp "artifacts/FujiNet-Go-Adam-flatpak-gnome/FujiNet-Go-Adam.flatpak" \
              "release/FujiNet-Go-Adam-${tag}.flatpak"
+          cp "artifacts/FujiNet-Go-Adam-flatpak-kde/FujiNet-Go-Adam-kde.flatpak" \
+             "release/FujiNet-Go-Adam-${tag}-kde.flatpak"
           (cd artifacts/FujiNet-Go-Adam-windows \
            && zip -qr "../../release/FujiNet-Go-Adam-${tag}-windows.zip" .)
           ls -l release
