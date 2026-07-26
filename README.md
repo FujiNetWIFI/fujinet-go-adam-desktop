@@ -214,9 +214,97 @@ release 0.2.0:
 
 The release is created as a **draft** so the notes can be edited before it
 goes out; if you prefer to write the release in the web UI first, do that
-and the assets are attached to it when the tag build finishes. Note that
-the macOS bundle is unsigned and unnotarised: first launch needs
-right-click ▸ Open.
+and the assets are attached to it when the tag build finishes.
+
+### Signing the macOS build
+
+The macOS job signs and notarises the app when these repository secrets
+exist, and quietly ships an unsigned bundle when they do not — so forks and
+pull requests, which never receive secrets, still build:
+
+| Secret | What it is |
+|---|---|
+| `MACOS_CERTIFICATE` | "Developer ID Application" certificate + key, exported as `.p12`, then `base64 -i cert.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | the password used for that export |
+| `MACOS_SIGN_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `MACOS_NOTARY_KEY` | App Store Connect API key `.p8`, base64-encoded |
+| `MACOS_NOTARY_KEY_ID` | that key's Key ID |
+| `MACOS_NOTARY_ISSUER` | the Issuer ID from App Store Connect |
+
+All of it requires a paid Apple Developer Program membership: a Developer
+ID certificate cannot be issued without one, and notarisation is what
+actually removes the Gatekeeper warning. Certificate but no notary key is a
+valid halfway house (the app is signed and its origin verifiable, but first
+launch still needs right-click ▸ Open); the build says so in a warning.
+Signing runs on every build once the certificate secrets exist — cheap, and
+it catches an expired certificate early — while notarisation only runs for
+`v*` tags.
+
+#### Producing those secrets without a Mac
+
+Apple's own instructions assume Keychain Access, but nothing here needs
+macOS — the certificate request, the `.p12` and the API key can all be made
+on Linux.
+
+**1. Certificate.** Generate a key and signing request, keeping the key
+somewhere safe (losing it means revoking and reissuing):
+
+```sh
+openssl req -new -newkey rsa:2048 -nodes \
+    -keyout devid.key -out devid.csr \
+    -subj "/emailAddress=you@example.com/CN=Your Name/C=US"
+```
+
+Upload `devid.csr` at developer.apple.com ▸ Certificates, Identifiers &
+Profiles ▸ Certificates ▸ **+** ▸ *Developer ID Application* (only the
+account holder may create these), and download the resulting
+`developerID_application.cer`. Also fetch the matching **Developer ID
+Certification Authority** intermediate from
+<https://www.apple.com/certificateauthority/> — without it in the bundle,
+`codesign` on the runner cannot build a chain to Apple's root.
+
+**2. Bundle them into a `.p12`.** The explicit algorithms matter: macOS
+cannot import the AES/PBKDF2 PKCS#12 that OpenSSL 3 writes by default.
+
+```sh
+openssl x509 -inform DER -in developerID_application.cer -out devid.pem
+openssl x509 -inform DER -in DeveloperIDG2CA.cer -out intermediate.pem
+openssl pkcs12 -export \
+    -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+    -inkey devid.key -in devid.pem -certfile intermediate.pem \
+    -name "Developer ID Application" -out devid.p12
+openssl x509 -in devid.pem -noout -subject   # the MACOS_SIGN_IDENTITY value
+```
+
+The subject's CN is the identity string, in the form
+`Developer ID Application: Your Name (TEAMID)`.
+
+**3. Notary key.** App Store Connect ▸ Users and Access ▸ Integrations ▸
+App Store Connect API ▸ **Team Keys** ▸ **+**, with Developer access.
+Download the `.p8` — it is offered exactly once — and note the Key ID from
+the row and the Issuer ID from the top of the page.
+
+**4. Load the secrets** (base64 so the binaries survive as text):
+
+```sh
+base64 -w0 devid.p12 | gh secret set MACOS_CERTIFICATE
+gh secret set MACOS_CERTIFICATE_PASSWORD          # the -export password
+gh secret set MACOS_SIGN_IDENTITY                 # from step 2
+base64 -w0 AuthKey_XXXXXXXX.p8 | gh secret set MACOS_NOTARY_KEY
+gh secret set MACOS_NOTARY_KEY_ID
+gh secret set MACOS_NOTARY_ISSUER
+```
+
+The next push to `main` will sign (watch the macOS job's *Sign and notarise*
+step for `codesign --verify` output); the next `v*` tag will additionally
+notarise and staple.
+
+`libfujinet.dylib` is signed first and the bundle second, both with the same
+identity: the hardened runtime that notarisation requires only lets the app
+`dlopen` a library signed by the same team.
+
+Without any of this the shipped bundle is unsigned, and first launch needs
+right-click ▸ Open (or `xattr -dr com.apple.quarantine "FujiNet Go Adam.app"`).
 
 ## Repository layout
 

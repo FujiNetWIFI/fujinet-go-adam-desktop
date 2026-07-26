@@ -120,6 +120,80 @@ jobs:
           fi
           test -f "$APP/Contents/Frameworks/libfujinet.dylib" \
             || { echo "::error::libfujinet.dylib missing from the bundle"; exit 1; }
+      # Signing and notarisation, when the credentials are configured (see
+      # "Signing the macOS build" in the README). Without them the step is a
+      # no-op and the build still produces a working, unsigned bundle -- so
+      # pull requests and forks, which never receive secrets, stay green.
+      - name: Sign and notarise the app bundle
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+        run: |
+          set -euo pipefail
+          APP="build/frontends/macos/FujiNet Go Adam.app"
+          if [ -z "${CERT_P12}" ]; then
+            echo "No signing certificate configured -- shipping unsigned."
+            exit 0
+          fi
+
+          # A throwaway keychain: the runner is disposable, but this keeps
+          # the certificate out of the login keychain and lets the private
+          # key be used non-interactively.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PWD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          printf '%s' "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | sed 's/["[:space:]]//g')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          # Inside out: the FujiNet library first, then the bundle around it.
+          # --options runtime (the hardened runtime) is required for
+          # notarisation, and it only allows the app to dlopen a library
+          # signed by the same team -- which is why both are signed here
+          # with the same identity rather than leaving the dylib ad-hoc.
+          codesign --force --timestamp --options runtime \
+            --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/libfujinet.dylib"
+          codesign --force --timestamp --options runtime \
+            --sign "$SIGN_IDENTITY" "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+
+          # Signing runs on every build (it is quick, and proves the
+          # certificate still works); notarisation is a round trip to
+          # Apple's service, so it is kept for the builds that ship.
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "Signed. Notarisation runs for tag builds."
+            exit 0
+          fi
+
+          if [ -z "${NOTARY_KEY}" ]; then
+            echo "::warning::Signed, but no notary credentials -- Gatekeeper"
+            echo "::warning::will still block this build on first launch."
+            exit 0
+          fi
+
+          # Notarisation takes the zip; the ticket is then stapled to the
+          # .app so it validates offline, and the release zip is made from
+          # the stapled bundle in the next step.
+          printf '%s' "$NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER" --wait
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          rm -f "$RUNNER_TEMP/notary.p8"
+
       # ditto preserves the executable bits and structure that a plain
       # artifact upload of a .app directory does not.
       - name: Zip app bundle

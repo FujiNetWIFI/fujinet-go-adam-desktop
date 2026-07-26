@@ -23,6 +23,15 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.0" date="2026-07-26">
+      <description>
+        <p>
+          FujiNet now runs on Windows as well, the native debugger is
+          available in every frontend, and the macOS build gained the
+          standard application, Window and Settings menus.
+        </p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-07-22"/>
   </releases>
 </component>

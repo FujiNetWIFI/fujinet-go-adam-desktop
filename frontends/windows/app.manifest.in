@@ -5,7 +5,7 @@
   DPI. Both matter for the debugger window.
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="online.fujinet.go.adam" version="0.1.0.0"
+  <assemblyIdentity type="win32" name="online.fujinet.go.adam" version="@PROJECT_VERSION@.0"
                     processorArchitecture="*"/>
   <description>Self-contained Coleco ADAM with built-in FujiNet</description>
   <dependency>
