@@ -229,6 +229,7 @@ jobs:
             mingw-w64-ucrt-x86_64-python-jinja
             mingw-w64-ucrt-x86_64-mbedtls
             mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-nsis
             mingw-w64-ucrt-x86_64-expat
             mingw-w64-ucrt-x86_64-zlib
       # Static SDL3 (as on macOS) so the shipped .exe has no loose DLL
@@ -313,6 +314,25 @@ jobs:
         with:
           name: FujiNet-Go-Adam-windows
           path: dist/FujiNet-Go-Adam
+      # The installer packages the folder staged above, so the two Windows
+      # downloads are the same bits: one for people who want Start Menu entry
+      # and an uninstaller, one for portable use.
+      - name: Build the installer
+        run: |
+          version=$(sed -n 's/^project(.*VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          makensis -V2 \
+            -DVERSION="$version" \
+            -DSRCDIR="$(cygpath -w "$PWD/dist/FujiNet-Go-Adam")" \
+            -DOUTFILE="$(cygpath -w "$PWD/dist/FujiNet-Go-Adam-Setup.exe")" \
+            -DAPPICON="$(cygpath -w "$PWD/frontends/windows/app.ico")" \
+            build-aux/windows/installer.nsi
+          test -f dist/FujiNet-Go-Adam-Setup.exe \
+            || { echo "::error::installer not produced"; exit 1; }
+      - name: Upload installer
+        uses: actions/upload-artifact@v5
+        with:
+          name: FujiNet-Go-Adam-windows-installer
+          path: dist/FujiNet-Go-Adam-Setup.exe
 
   # The flatpak is the distributable Linux build, and the strictest test of
   # the "clone and build" promise: the sandbox has no network during the
@@ -407,6 +427,8 @@ jobs:
              "release/FujiNet-Go-Adam-${tag}-kde.flatpak"
           (cd artifacts/FujiNet-Go-Adam-windows \
            && zip -qr "../../release/FujiNet-Go-Adam-${tag}-windows.zip" .)
+          cp "artifacts/FujiNet-Go-Adam-windows-installer/FujiNet-Go-Adam-Setup.exe" \
+             "release/FujiNet-Go-Adam-${tag}-windows-setup.exe"
           ls -l release
       # Creates the release when the tag was pushed on its own (as a draft,
       # so the notes can be written before it goes out); when the release
