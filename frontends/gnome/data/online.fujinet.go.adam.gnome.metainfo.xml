@@ -43,6 +43,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.2" date="2026-07-27">
+      <description>
+        <p>
+          Removes a multi-second freeze while loading. When the drive missed
+          a request it was left to time out, stalling the machine for five
+          seconds before anything retried; the request is now re-sent
+          promptly.
+        </p>
+      </description>
+    </release>
     <release version="0.7.1" date="2026-07-26">
       <description>
         <p>
