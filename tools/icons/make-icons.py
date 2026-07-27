@@ -7,10 +7,12 @@ fujinet-go-adam/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png)
 over the flat brand background colour. Android applies the rounded mask at
 runtime; on the desktop the mask has to be baked in, so this composites the
 two into a rounded square and writes every hicolor size the desktop
-environments look for.
+environments look for, plus a macOS .icns (Pillow packs that as plain PNGs
+in the icns TOC, so it needs no iconutil/macOS host).
 
-The results are committed (data/icons/hicolor/...) so building the project
-needs no image tooling; re-run this only when the artwork changes:
+The results are committed (data/icons/hicolor/..., data/icons/*.icns) so
+building the project needs no image tooling; re-run this only when the
+artwork changes:
 
     python3 tools/icons/make-icons.py
 """
@@ -23,12 +25,14 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[2]
 FOREGROUND = ROOT / "data/icons/src/fujinet-go-adam-foreground.png"
 OUTDIR = ROOT / "data/icons/hicolor"
+ICNS_OUT = ROOT / "data/icons/fujinet-go-adam.icns"
 
 BACKGROUND = (0x8D, 0x84, 0xE5, 0xFF)   # values/colors.xml: ic_launcher_background
 MASTER = 1024                            # render big, downsample with LANCZOS
 CORNER_RADIUS = 0.22                     # fraction of the edge
 FOREGROUND_ZOOM = 1.18                   # Android's mask crops; compensate a little
 SIZES = (16, 24, 32, 48, 64, 128, 192, 256, 512)
+ICNS_SIZES = (32, 64, 128, 256, 512, 1024)  # every size macOS's icns TOC references
 
 
 def render_master() -> Image.Image:
@@ -70,6 +74,15 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         master.resize((size, size), Image.LANCZOS).save(out, optimize=True)
         print(f"wrote {out.relative_to(ROOT)}")
+
+    # Pillow's ICNS writer works on any platform (no iconutil needed): it
+    # just packs PNGs into the icns TOC. Pass every non-master size in
+    # explicitly, LANCZOS-downsampled from the 1024 master like the hicolor
+    # set above, so nothing gets a blurry re-resize from a smaller source.
+    variants = [master.resize((size, size), Image.LANCZOS)
+                for size in ICNS_SIZES if size != master.width]
+    master.save(ICNS_OUT, format="ICNS", append_images=variants)
+    print(f"wrote {ICNS_OUT.relative_to(ROOT)}")
     return 0
 
 

@@ -328,6 +328,11 @@ tools/icons/          icon rendering
 tools/symbols/        EOS/OS7 debug-symbol extraction
 ```
 
+This repository is also the model for the other FujiNet Go desktop targets
+(Apple II, CoCo, MSX). [PORTING.md](PORTING.md) distills the architecture,
+the per-target parameters, and every lesson that cost real debugging time
+into a guide for standing the next one up.
+
 ## License
 
 GPL-3.0-or-later (see LICENSE). Third-party provenance and the ROM policy

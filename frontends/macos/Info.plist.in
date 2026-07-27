@@ -11,6 +11,8 @@
   <string>online.fujinet.go.adam.macos</string>
   <key>CFBundleExecutable</key>
   <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+  <key>CFBundleIconFile</key>
+  <string>${MACOSX_BUNDLE_ICON_FILE}</string>
   <key>CFBundleShortVersionString</key>
   <string>${PROJECT_VERSION}</string>
   <key>CFBundlePackageType</key>

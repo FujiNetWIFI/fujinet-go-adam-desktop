@@ -7,15 +7,24 @@ endif()
 
 enable_language(OBJC)
 
+# Same rendered art as the other frontends (tools/icons/make-icons.py), just
+# packed as .icns instead of hicolor PNGs. Listing it as a source with a
+# MACOSX_PACKAGE_LOCATION is what makes CMake copy it into Contents/Resources
+# for both the Xcode and Ninja/Makefiles generators.
+set(MACOS_ICON "${CMAKE_SOURCE_DIR}/data/icons/fujinet-go-adam.icns")
+set_source_files_properties(${MACOS_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
 add_executable(fujinet-go-adam-macos MACOSX_BUNDLE
   main.m
   AppDelegate.m
   DisplayView.m
   debugger/DebuggerWindow.m
+  ${MACOS_ICON}
 )
 set_target_properties(fujinet-go-adam-macos PROPERTIES
   OUTPUT_NAME "FujiNet Go Adam"
   MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
+  MACOSX_BUNDLE_ICON_FILE "fujinet-go-adam.icns"
 )
 target_link_libraries(fujinet-go-adam-macos PRIVATE
   adamsession
