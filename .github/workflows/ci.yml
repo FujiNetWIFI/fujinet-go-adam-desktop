@@ -331,10 +331,7 @@ jobs:
             bundle: FujiNet-Go-Adam.flatpak
           - frontend: kde
             app-id: online.fujinet.go.adam.kde
-            # The BaseApp carries QtWebEngine, which org.kde.Sdk does not
-            # ship; the manifest declares it as its base, so it has to be
-            # installed here too or flatpak-builder cannot resolve it.
-            runtime: org.kde.Platform//6.11 org.kde.Sdk//6.11 io.qt.qtwebengine.BaseApp//6.11
+            runtime: org.kde.Platform//6.11 org.kde.Sdk//6.11
             bundle: FujiNet-Go-Adam-kde.flatpak
     steps:
       - uses: actions/checkout@v5

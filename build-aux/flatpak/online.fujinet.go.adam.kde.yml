@@ -4,7 +4,7 @@
 # easy to diff: every input is declared here and a build never depends on
 # the state of a working checkout. The differences are the runtime (KDE
 # instead of GNOME), the frontend selected from the shared CMake tree, and
-# the web view (QtWebEngine from org.kde.Platform rather than WebKitGTK).
+# no embedded web view (see the note below).
 #
 # Build + install + run:
 #   flatpak-builder --user --install --force-clean build-flatpak-kde \
@@ -22,13 +22,15 @@ runtime-version: '6.11'
 sdk: org.kde.Sdk
 command: fujinet-go-adam-kde
 
-# QtWebEngine is the KDE counterpart of the GNOME runtime's WebKitGTK, and it
-# is not in org.kde.Sdk -- it ships as this base app. Without it the frontend
-# still builds, but WITH_WEBVIEW finds no Qt6::WebEngineWidgets and quietly
-# degrades to opening the FujiNet config in an external browser.
-base: io.qt.qtwebengine.BaseApp
-base-version: '6.11'
-
+# No embedded web view here, deliberately. QtWebEngine is the KDE counterpart
+# of the GNOME runtime's WebKitGTK, but org.kde.Sdk does not ship it -- it
+# comes from io.qt.qtwebengine.BaseApp, and because a base app's files are
+# copied into /app they land in the bundle too: a whole Chromium, ~200 MB of
+# libQt6WebEngineCore alone, for a 70 MB download against GNOME's 4 MB.
+#
+# With WITH_WEBVIEW=OFF the frontend opens the FujiNet config in the user's
+# browser via QDesktopServices::openUrl(), which the OpenURI portal handles
+# without any extra sandbox permission. Same feature, a fraction of the size.
 finish-args:
   - --share=ipc
   - --share=network          # TNFS hosts + the loopback web UI
@@ -37,8 +39,8 @@ finish-args:
   - --socket=pulseaudio      # SDL audio (PipeWire's Pulse interface)
   - --device=all             # gamepad hotplug (hidraw/evdev)
 
-# The base app installs its build-time pieces into /app; drop what the
-# finished application does not need.
+# Only the build-time leftovers of our own modules; with no QtWebEngine base
+# app there is nothing large left to prune.
 cleanup:
   - /include
   - /lib/cmake
@@ -57,6 +59,15 @@ modules:
       - -DCMAKE_BUILD_TYPE=Release
       - -DSDL_STATIC=OFF
       - -DSDL_TEST_LIBRARY=OFF
+      # SDL is used only for audio and gamepad here -- the window is Qt's, and
+      # no frontend calls SDL_INIT_VIDEO. Switching the video subsystem off
+      # drops SDL's X11 requirement, which org.kde.Sdk does not satisfy on its
+      # own (the QtWebEngine base app used to drag those headers in, so this
+      # surfaced the moment it was removed).
+      - -DSDL_VIDEO=OFF
+      # ...and SDL refuses to configure with no X11 and no Wayland unless the
+      # intent is stated outright (cmake/macros.cmake guards on this).
+      - -DSDL_UNIX_CONSOLE_BUILD=ON
     sources:
       - type: git
         url: https://github.com/libsdl-org/SDL.git
@@ -135,7 +146,7 @@ modules:
     builddir: true
     config-opts:
       - -DFRONTEND=kde
-      - -DWITH_WEBVIEW=ON     # QtWebEngine ships in the KDE runtime
+      - -DWITH_WEBVIEW=OFF    # see the note above finish-args
     build-options:
       env:
         # Where the FujiNet build finds the static mbedTLS built above.
