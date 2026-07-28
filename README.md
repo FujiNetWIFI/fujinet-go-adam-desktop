@@ -128,6 +128,28 @@ lines), `FUJINET_WEBUI_BIND=addr:port` (web UI bind, default
 `127.0.0.1:65214`), `ADAM_OPEN_DEBUGGER=1`,
 `ADAM_DEBUGGER_TAB=vdp|trace` (debugger start tab).
 
+### Debugging FujiNet firmware
+
+`libfujinet.so` is `dlopen`'d into the emulator process, not run as a
+subprocess, so gdb can attach to it exactly like any other shared library once
+it's loaded — the only reason this normally isn't useful is that the runtime
+is always built Release, with no debug info. Build a Debug copy instead:
+
+```sh
+FN_DEBUG=1 tools/fujinet/build-fujinet-desktop.sh
+FUJINET_LIB=tools/fujinet/work/out/libfujinet.so gdb --args \
+    ./build-all/frontends/gnome/fujinet-go-adam-gnome
+```
+
+`FUJINET_LIB` (see above) points the session at that build instead of
+whatever CMake normally provides, so the two can coexist — no need to rebuild
+the main app. Because the library loads part-way through startup, set
+breakpoints after it's mapped (`catch load libfujinet.so` before `run`, or
+just interrupt with Ctrl-C once FujiNet's console output appears and set them
+then). `FN_DEBUG=1` forces a rebuild if the tree was last built Release (and
+vice versa), so switching back just needs a plain
+`tools/fujinet/build-fujinet-desktop.sh`.
+
 ### macOS
 
 ```sh

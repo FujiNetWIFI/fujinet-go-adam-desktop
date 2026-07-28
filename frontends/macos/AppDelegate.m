@@ -46,7 +46,7 @@ static NSArray<NSString *> *machineSettingKeys(void)
     return keys;
 }
 
-@interface AppDelegate () <NSWindowDelegate>
+@interface AppDelegate () <NSWindowDelegate, WKUIDelegate>
 @end
 
 @implementation AppDelegate {
@@ -164,6 +164,7 @@ static NSArray<NSString *> *machineSettingKeys(void)
     _configWindow.releasedWhenClosed = NO;
     WKWebView *web = [[WKWebView alloc] initWithFrame:frame];
     web.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    web.UIDelegate = self;
     NSString *url = [NSString
         stringWithUTF8String:adamsession_fujinet_webui_url(_session)];
     [web loadRequest:[NSURLRequest
@@ -171,6 +172,24 @@ static NSArray<NSString *> *machineSettingKeys(void)
     _configWindow.contentView = web;
     [_configWindow center];
     [_configWindow makeKeyAndOrderFront:nil];
+}
+
+/* The FujiNet web UI's OneDrive/Google Drive "Authorize" buttons open the
+ * provider's consent page via window.open(). WKWebView has no popup window
+ * of its own to show it in unless a UIDelegate supplies one, so hand the URL
+ * to the system browser instead: Google and Microsoft both reject OAuth
+ * flows from an embedded webview's user-agent anyway. */
+- (WKWebView *)webView:(WKWebView *)webView
+    createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
+               forNavigationAction:(WKNavigationAction *)navigationAction
+                    windowFeatures:(WKWindowFeatures *)windowFeatures
+{
+    (void)webView;
+    (void)configuration;
+    (void)windowFeatures;
+    if (navigationAction.request.URL)
+        [[NSWorkspace sharedWorkspace] openURL:navigationAction.request.URL];
+    return nil;
 }
 
 - (void)showFujiNetLog:(id)sender

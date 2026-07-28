@@ -43,6 +43,15 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.4" date="2026-07-28">
+      <description>
+        <p>
+          Fixes the OneDrive and Google Drive Authorize buttons in the
+          FujiNet configuration page, which silently did nothing: they now
+          open in the system browser, which OAuth requires anyway.
+        </p>
+      </description>
+    </release>
     <release version="0.7.3" date="2026-07-27">
       <description>
         <p>
