@@ -43,6 +43,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.5" date="2026-07-28">
+      <description>
+        <p>
+          Fixes the FujiNet Configuration window being unreachable when
+          another FujiNet-family process on the machine already held the web
+          admin's port. It now binds a random free port each run instead of
+          a fixed one.
+        </p>
+      </description>
+    </release>
     <release version="0.7.4" date="2026-07-28">
       <description>
         <p>

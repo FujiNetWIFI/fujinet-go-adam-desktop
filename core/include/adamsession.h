@@ -24,8 +24,12 @@ extern "C" {
 #define ADAMSESSION_FB_WIDTH  256
 #define ADAMSESSION_FB_HEIGHT 212
 
-/* AdamNet Bus-over-IP loopback port (core listens, FujiNet connects in) and
- * the FujiNet web admin port, both fixed to match the Android app. */
+/* AdamNet Bus-over-IP loopback port (core listens, FujiNet connects in),
+ * fixed to match the Android app. The FujiNet web admin port is chosen at
+ * random each run (see fujinet_runtime.c) so a second FujiNet-family
+ * process on the same machine holding a fixed port can never make the
+ * config window unreachable; this is only the fallback used if the OS
+ * somehow can't hand out a free one. */
 #define ADAMSESSION_BOIP_PORT  65216
 #define ADAMSESSION_WEBUI_PORT 65214
 

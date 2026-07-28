@@ -124,9 +124,14 @@ coexist: they share one settings store and FujiNet runtime.
 
 Useful environment switches: `ADAM_PACE_LOG=1` (per-second frame pacing
 diagnostics), `FUJINET_QUIET_BLOCKS=1` (suppress per-block disk log
-lines), `FUJINET_WEBUI_BIND=addr:port` (web UI bind, default
-`127.0.0.1:65214`), `ADAM_OPEN_DEBUGGER=1`,
+lines), `FUJINET_WEBUI_BIND=addr:port` (force the web UI to a fixed bind
+instead of the random free port picked each run), `ADAM_OPEN_DEBUGGER=1`,
 `ADAM_DEBUGGER_TAB=vdp|trace` (debugger start tab).
+
+The web admin normally binds a random free loopback port each run (the
+FujiNet Configuration window always points at whichever one was picked) so a
+second FujiNet-family process on the machine holding a fixed port can never
+make it unreachable.
 
 ### Debugging FujiNet firmware
 

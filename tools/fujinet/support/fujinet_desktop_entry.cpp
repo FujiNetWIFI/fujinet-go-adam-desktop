@@ -8,7 +8,9 @@
  * Differences from Android: console lines are echoed to the saved host
  * stderr instead of logcat, the per-block log suppression toggle is the
  * FUJINET_QUIET_BLOCKS environment variable, and the web admin binds
- * 127.0.0.1 by default (FUJINET_WEBUI_BIND overrides).
+ * 127.0.0.1 on the port the host app passes in as listenPort (a fresh
+ * random port picked per run, see fujinet_runtime.c) unless
+ * FUJINET_WEBUI_BIND overrides it outright.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -531,7 +533,6 @@ FUJINET_ENTRY bool fujinet_desktop_start_runtime(
         int listenPort
 ) {
     (void)dataPath;
-    (void)listenPort;
 
     std::unique_lock<std::mutex> lock(g_mutex);
     g_last_error.clear();
@@ -555,8 +556,11 @@ FUJINET_ENTRY bool fujinet_desktop_start_runtime(
     const std::string config(configPath);
     const std::string sd(sdPath);
     const char* webui_env = getenv("FUJINET_WEBUI_BIND");
-    const std::string webui_bind(webui_env && *webui_env ? webui_env
-                                                         : "127.0.0.1:65214");
+    const std::string webui_bind(
+        webui_env && *webui_env
+            ? webui_env
+            : "127.0.0.1:" +
+                  std::to_string(listenPort > 0 ? listenPort : 65214));
     g_setup_complete = false;
     g_setup_failed = false;
 

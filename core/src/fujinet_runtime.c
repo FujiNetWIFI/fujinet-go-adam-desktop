@@ -8,6 +8,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+/* winsock2.h must come before dynlib.h's <windows.h> (which drags in the
+ * legacy winsock.h and conflicts) -- see net_win32.c for the same rule. */
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 #include <limits.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -74,6 +86,57 @@ static int load_library_locked(adamsession *s)
     return 0;
 }
 
+/* Ask the OS for an unused loopback TCP port for the FujiNet web admin
+ * instead of the fixed ADAMSESSION_WEBUI_PORT: a second FujiNet-family
+ * process on the same machine (a standalone fujinet-pc-adam, another
+ * instance of this app) can already hold the fixed port, in which case the
+ * runtime's web server silently fails to bind and the config window loads
+ * nothing. Bind to port 0, read back what the OS assigned, then close --
+ * the runtime binds the real listener moments later in its own thread. */
+static int pick_free_webui_port(void)
+{
+    struct sockaddr_in addr;
+#if defined(_WIN32)
+    static int wsa_started = 0;
+    SOCKET fd;
+    socklen_t addr_len = sizeof(addr);
+    if (!wsa_started) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        wsa_started = 1;
+    }
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == INVALID_SOCKET) return 0;
+#else
+    int fd;
+    socklen_t addr_len = sizeof(addr);
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return 0;
+#endif
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0; /* 0 = let the OS pick */
+
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+        getsockname(fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+#if defined(_WIN32)
+        closesocket(fd);
+#else
+        close(fd);
+#endif
+        return 0;
+    }
+
+#if defined(_WIN32)
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+    return ntohs(addr.sin_port);
+}
+
 int fujinet_start(adamsession *s)
 {
     pthread_mutex_lock(&g_mtx);
@@ -91,8 +154,15 @@ int fujinet_start(adamsession *s)
         pthread_mutex_unlock(&g_mtx);
         return -1;
     }
+
+    int webui_port = pick_free_webui_port();
+    if (webui_port <= 0)
+        webui_port = ADAMSESSION_WEBUI_PORT;
+    snprintf(s->webui_url, sizeof(s->webui_url), "http://127.0.0.1:%d/",
+             webui_port);
+
     if (!g_start(s->fujinet_root, s->fujinet_config, s->fujinet_sd,
-                 s->fujinet_data, ADAMSESSION_BOIP_PORT)) {
+                 s->fujinet_data, webui_port)) {
         const char *err = g_last_error ? g_last_error() : NULL;
         session_set_error(s, "FujiNet runtime failed to start: %s",
                           err && *err ? err : "(unknown)");

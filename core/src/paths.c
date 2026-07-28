@@ -220,6 +220,8 @@ int paths_init(adamsession *s, const adamsession_paths *p)
     else
         s->fujinet_src[0] = '\0';
 
+    /* Placeholder until fujinet_start() picks a real port and overwrites
+     * this; nothing is listening on ADAMSESSION_WEBUI_PORT before then. */
     snprintf(s->webui_url, sizeof(s->webui_url), "http://127.0.0.1:%d/",
              ADAMSESSION_WEBUI_PORT);
     return 0;
