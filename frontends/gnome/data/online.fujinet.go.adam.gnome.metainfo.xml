@@ -43,6 +43,15 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.6" date="2026-08-02">
+      <description>
+        <p>
+          The Linux release now ships .deb/.rpm/.tar.gz packages
+          (via CPack) alongside the flatpaks, matching the sibling
+          CoCo and Apple II desktop apps' own release process.
+        </p>
+      </description>
+    </release>
     <release version="0.7.5" date="2026-07-28">
       <description>
         <p>
