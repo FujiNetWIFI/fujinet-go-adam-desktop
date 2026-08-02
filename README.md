@@ -223,9 +223,13 @@ all of it passes, publishes the packages it produced as release assets:
 
 | Asset | Contents |
 |---|---|
+| `fujinet-go-adam-gnome-<version>-Linux.{deb,rpm,tar.gz}` | the GNOME frontend, packaged with CPack |
+| `fujinet-go-adam-kde-<version>-Linux.{deb,rpm,tar.gz}` | the KDE frontend, packaged with CPack |
 | `FujiNet-Go-Adam-<version>-macos.zip` | the `.app` bundle (SDL and FujiNet inside) |
 | `FujiNet-Go-Adam-<version>-windows.zip` | the exe, `fujinet.dll`, and the `fujinet/` runtime tree |
+| `FujiNet-Go-Adam-<version>-windows-setup.exe` | NSIS installer (per-user, no admin rights) |
 | `FujiNet-Go-Adam-<version>.flatpak` | single-file bundle: `flatpak install ./…flatpak` |
+| `FujiNet-Go-Adam-<version>-kde.flatpak` | same, for the KDE frontend |
 
 The version is declared in the tree, not derived from the tag, so that a
 downloaded build's About box can never disagree with the download it came
