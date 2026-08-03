@@ -38,6 +38,8 @@ enum {
     IDC_MEM_ADDR, IDC_MEM_VIEW, IDC_TRACE_VIEW,
     IDC_PAT_BANK, IDC_SPRITE_INFO,
     IDC_VIEW_NT, IDC_VIEW_PAT, IDC_VIEW_SPR, IDC_VIEW_PAL,
+    IDC_VDP_STATE, IDC_VRAM_ADDR, IDC_VRAM_VIEW, IDC_VRAM_PREV,
+    IDC_VRAM_NEXT,
     IDC_REG0, IDC_REG_LAST = IDC_REG0 + 7,
     IDC_LABEL_FIRST /* statics that only carry text */
 };
@@ -45,7 +47,12 @@ enum {
 /* Accelerator-driven commands (also the toolbar buttons' ids above). */
 #define PAGE_CPU 0
 #define PAGE_VDP 1
-#define PAGE_TRACE 2
+#define PAGE_VRAM 2
+#define PAGE_TRACE 3
+
+#define VRAM_ROWS 24
+#define VRAM_PAGE (VRAM_ROWS * 16)
+#define POKE_MAX 64
 
 typedef struct {
     const uint8_t *bgra;  /* owned by the debugger struct */
@@ -65,6 +72,8 @@ typedef struct {
     HWND pat_bank, sprite_info;
     HWND view_nt, view_pat, view_spr, view_pal;
     HWND reg_title;
+    HWND state_label, vdp_state;
+    HWND vram_label, vram_addr, vram_prev, vram_next, vram_status, vram_view;
 
     HFONT mono;
     HACCEL accel;
@@ -74,15 +83,18 @@ typedef struct {
 
     uint16_t disasm_base;
     uint16_t mem_base;
+    uint16_t vram_base;
     int follow_pc;
     int page;
 
     /* VDP scratch: the engine renders RGBA, GDI wants BGRA. */
     adamvdp_snapshot snap;
     uint8_t nt_rgba[256 * 192 * 4], pat_rgba[256 * 64 * 4];
-    uint8_t spr_rgba[128 * 64 * 4], pal_rgba[16 * 4];
+    uint8_t spr_rgba[128 * 64 * 4];
+    uint8_t pal_rgba[ADAMVDP_PAL_W * ADAMVDP_PAL_H * 4];
     uint8_t nt_bgra[256 * 192 * 4], pat_bgra[256 * 64 * 4];
-    uint8_t spr_bgra[128 * 64 * 4], pal_bgra[16 * 4];
+    uint8_t spr_bgra[128 * 64 * 4];
+    uint8_t pal_bgra[ADAMVDP_PAL_W * ADAMVDP_PAL_H * 4];
     pixel_view nt_view, pat_view, spr_view, pal_view;
 } debugger;
 
@@ -137,6 +149,27 @@ static void rgba_to_bgra(const uint8_t *src, uint8_t *dst, int pixels)
 static void set_text(HWND h, const char *text)
 {
     SetWindowTextA(h, text);
+}
+
+/* Same, for text from the shared formatters, which end lines with a bare
+ * LF -- an EDIT control renders those as a box instead of a line break. */
+static void set_text_lf(HWND h, const char *text)
+{
+    size_t n = strlen(text), i, o = 0;
+    char *buf = (char *)malloc(n * 2 + 1);
+
+    if (!buf) {
+        set_text(h, text);
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        if (text[i] == '\n')
+            buf[o++] = '\r';
+        buf[o++] = text[i];
+    }
+    buf[o] = '\0';
+    set_text(h, buf);
+    free(buf);
 }
 
 static int parse_addr(debugger *d, const char *text, uint16_t *out)
@@ -333,26 +366,29 @@ static void refresh_vdp(debugger *d)
     rgba_to_bgra(d->spr_rgba, d->spr_bgra, 128 * 64);
 
     adamvdp_render_palette(&d->snap, d->pal_rgba);
-    rgba_to_bgra(d->pal_rgba, d->pal_bgra, 16);
+    rgba_to_bgra(d->pal_rgba, d->pal_bgra, ADAMVDP_PAL_W * ADAMVDP_PAL_H);
 
     InvalidateRect(d->view_nt, NULL, FALSE);
     InvalidateRect(d->view_pat, NULL, FALSE);
     InvalidateRect(d->view_spr, NULL, FALSE);
     InvalidateRect(d->view_pal, NULL, FALSE);
 
-    len = (size_t)snprintf(text, sizeof(text),
-                           "##  Y    X  PAT CLR EC   R0-R7: ");
-    for (i = 0; i < 8; i++)
-        len += (size_t)snprintf(text + len, sizeof(text) - len, "%02X ",
-                                d->snap.regs[i]);
-    len += (size_t)snprintf(text + len, sizeof(text) - len, " ST:%02X\r\n",
-                            d->snap.status);
+    len = (size_t)snprintf(text, sizeof(text), "##  Y    X  PAT CLR EC\r\n");
     for (i = 0; i < 32; i++)
         len += (size_t)snprintf(text + len, sizeof(text) - len,
                                 "%02d %3d  %3d  %02X  %2d  %d\r\n", i,
                                 info[i].y, info[i].x, info[i].pattern,
                                 info[i].color, info[i].early_clock);
     set_text(d->sprite_info, text);
+
+    {
+        static char state[4096];
+        adamvdp_format_state(&d->snap, state, (int)sizeof(state));
+        set_text_lf(d->vdp_state, state);
+        adamvdp_format_hex(&d->snap, d->vram_base, VRAM_ROWS, state,
+                           (int)sizeof(state));
+        set_text_lf(d->vram_view, state);
+    }
 }
 
 static void refresh_all(debugger *d)
@@ -434,6 +470,33 @@ static void on_accept(debugger *d, int id)
             refresh_disasm(d);
         }
         break;
+    case IDC_VRAM_ADDR: {
+        /* One field does both jobs: an address alone scrolls the dump
+         * there, an address followed by hex bytes writes them first. */
+        uint8_t bytes[POKE_MAX];
+        char msg[96];
+        int n;
+
+        edit_text(d->vram_addr, buf, sizeof(buf));
+        n = adamvdp_parse_poke(buf, &addr, bytes, POKE_MAX);
+        if (n < 0) {
+            set_text(d->vram_status,
+                     "expected: addr [bytes...], e.g. 1800: 41 42");
+            break;
+        }
+        if (n > 0) {
+            adamdebug_vdp_write(d->dbg, addr, bytes, n);
+            snprintf(msg, sizeof(msg), "wrote %d byte%s at $%04X", n,
+                     n == 1 ? "" : "s", addr);
+            set_text(d->vram_addr, "");
+        } else {
+            snprintf(msg, sizeof(msg), "$%04X", addr);
+        }
+        set_text(d->vram_status, msg);
+        d->vram_base = (uint16_t)(addr & 0x3FF0);
+        refresh_vdp(d);
+        break;
+    }
     default:
         break;
     }
@@ -606,8 +669,10 @@ static void build_controls(debugger *d)
     SendMessageA(d->tabs, TCM_INSERTITEMA, 0, (LPARAM)&item);
     item.pszText = (char *)"VDP";
     SendMessageA(d->tabs, TCM_INSERTITEMA, 1, (LPARAM)&item);
-    item.pszText = (char *)"Trace";
+    item.pszText = (char *)"VDP RAM";
     SendMessageA(d->tabs, TCM_INSERTITEMA, 2, (LPARAM)&item);
+    item.pszText = (char *)"Trace";
+    SendMessageA(d->tabs, TCM_INSERTITEMA, 3, (LPARAM)&item);
 
     /* Toolbar */
     d->pause_btn = child(d, "BUTTON", "Pause (F5)",
@@ -647,7 +712,8 @@ static void build_controls(debugger *d)
     d->view_nt = pixels(d, IDC_VIEW_NT, &d->nt_view, d->nt_bgra, 256, 192);
     d->view_pat = pixels(d, IDC_VIEW_PAT, &d->pat_view, d->pat_bgra, 256, 64);
     d->view_spr = pixels(d, IDC_VIEW_SPR, &d->spr_view, d->spr_bgra, 128, 64);
-    d->view_pal = pixels(d, IDC_VIEW_PAL, &d->pal_view, d->pal_bgra, 16, 1);
+    d->view_pal = pixels(d, IDC_VIEW_PAL, &d->pal_view, d->pal_bgra,
+                         ADAMVDP_PAL_W, ADAMVDP_PAL_H);
     d->pat_bank = child(d, "COMBOBOX", "",
                         CBS_DROPDOWNLIST | WS_VSCROLL, IDC_PAT_BANK);
     SendMessageA(d->pat_bank, CB_ADDSTRING, 0, (LPARAM) "Bank 0");
@@ -655,6 +721,18 @@ static void build_controls(debugger *d)
     SendMessageA(d->pat_bank, CB_ADDSTRING, 0, (LPARAM) "Bank 2");
     SendMessageA(d->pat_bank, CB_SETCURSEL, 0, 0);
     d->sprite_info = mono_view(d, IDC_SPRITE_INFO);
+
+    /* VDP RAM page: the decoded register/table state and a VRAM hex
+     * editor. Its own page rather than more columns on the VDP page,
+     * which is already three visualizers wide. */
+    d->state_label = label(d, "Registers & tables");
+    d->vdp_state = mono_view(d, IDC_VDP_STATE);
+    d->vram_label = label(d, "VRAM (Enter writes; addresses wrap at 16K)");
+    d->vram_addr = field(d, IDC_VRAM_ADDR);
+    d->vram_prev = child(d, "BUTTON", "<", BS_PUSHBUTTON, IDC_VRAM_PREV);
+    d->vram_next = child(d, "BUTTON", ">", BS_PUSHBUTTON, IDC_VRAM_NEXT);
+    d->vram_status = label(d, "");
+    d->vram_view = mono_view(d, IDC_VRAM_VIEW);
 
     /* Trace page */
     d->trace_view = mono_view(d, IDC_TRACE_VIEW);
@@ -668,6 +746,9 @@ static void show_page(debugger *d, int page)
                   d->mem_view};
     HWND vdp[] = {d->view_nt, d->view_pat, d->view_spr, d->view_pal,
                   d->pat_bank, d->sprite_info};
+    HWND vram[] = {d->state_label, d->vdp_state, d->vram_label,
+                   d->vram_addr, d->vram_prev, d->vram_next,
+                   d->vram_status, d->vram_view};
     size_t i;
 
     d->page = page;
@@ -679,6 +760,8 @@ static void show_page(debugger *d, int page)
     }
     for (i = 0; i < sizeof(vdp) / sizeof(vdp[0]); i++)
         ShowWindow(vdp[i], page == PAGE_VDP ? SW_SHOW : SW_HIDE);
+    for (i = 0; i < sizeof(vram) / sizeof(vram[0]); i++)
+        ShowWindow(vram[i], page == PAGE_VRAM ? SW_SHOW : SW_HIDE);
     ShowWindow(d->trace_view, page == PAGE_TRACE ? SW_SHOW : SW_HIDE);
 }
 
@@ -750,7 +833,9 @@ static void layout(debugger *d)
         int vx = px, vy = py;
 
         MoveWindow(d->view_nt, vx, vy, 512, 384, TRUE);
-        MoveWindow(d->view_pal, vx, vy + 392, 512, 32, TRUE);
+        /* The palette grid is drawn 1:1 so its index labels stay crisp. */
+        MoveWindow(d->view_pal, vx, vy + 392, ADAMVDP_PAL_W, ADAMVDP_PAL_H,
+                   TRUE);
         vx += 524;
         MoveWindow(d->pat_bank, vx, vy, 120, 200, TRUE);
         MoveWindow(d->view_pat, vx, vy + 30, 512, 128, TRUE);
@@ -760,6 +845,30 @@ static void layout(debugger *d)
             MoveWindow(d->sprite_info, vx, vy, px + pw - vx, ph, TRUE);
         else /* narrow window: park the sprite table under the images */
             MoveWindow(d->sprite_info, px, vy + 430, pw, ph - 434, TRUE);
+    }
+
+    /* VDP RAM: decoded state on the left, hex editor on the right (stacked
+     * when there is not room for two readable columns). */
+    {
+        int half = pw / 2 - 8;
+        int wide = half >= 460;
+        int lx = px, ly = py;
+        int rx = wide ? px + half + 16 : px;
+        int ry = wide ? py : py + ph / 2 + 8;
+        int lw = wide ? half : pw;
+        int rw = wide ? pw - half - 16 : pw;
+        int lh = wide ? ph : ph / 2 - 8;
+        int rh = wide ? ph : ph - (ry - py);
+
+        MoveWindow(d->state_label, lx, ly, lw, 18, TRUE);
+        MoveWindow(d->vdp_state, lx, ly + 20, lw, lh - 20, TRUE);
+
+        MoveWindow(d->vram_label, rx, ry, rw, 18, TRUE);
+        MoveWindow(d->vram_addr, rx, ry + 20, rw - 260, 22, TRUE);
+        MoveWindow(d->vram_prev, rx + rw - 256, ry + 19, 32, 24, TRUE);
+        MoveWindow(d->vram_next, rx + rw - 220, ry + 19, 32, 24, TRUE);
+        MoveWindow(d->vram_status, rx + rw - 182, ry + 23, 182, 18, TRUE);
+        MoveWindow(d->vram_view, rx, ry + 48, rw, rh - 48, TRUE);
     }
 
     MoveWindow(d->trace_view, px, py, pw, ph, TRUE);
@@ -781,7 +890,7 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
         if (wp == TIMER_REFRESH && !adamdebug_is_paused(d->dbg)) {
             refresh_regs(d);
-            if (d->page == PAGE_VDP)
+            if (d->page == PAGE_VDP || d->page == PAGE_VRAM)
                 refresh_vdp(d);
         }
         return 0;
@@ -817,6 +926,14 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_PAT_BANK:
             if (HIWORD(wp) == CBN_SELCHANGE)
                 refresh_vdp(d);
+            return 0;
+        case IDC_VRAM_PREV:
+            d->vram_base = (uint16_t)((d->vram_base - VRAM_PAGE) & 0x3FFF);
+            refresh_vdp(d);
+            return 0;
+        case IDC_VRAM_NEXT:
+            d->vram_base = (uint16_t)((d->vram_base + VRAM_PAGE) & 0x3FFF);
+            refresh_vdp(d);
             return 0;
         default:
             break;
@@ -914,11 +1031,14 @@ void adam_debugger_show(HWND parent, adamsession *session)
     adamdebug_set_stop_callback(d->dbg, stop_trampoline, d);
     SetTimer(d->hwnd, TIMER_REFRESH, 100, NULL);
 
-    /* Dev affordance: ADAM_DEBUGGER_TAB=vdp|trace selects the start tab. */
+    /* Dev affordance: ADAM_DEBUGGER_TAB=vdp|vram|trace picks the start
+     * tab. */
     tab = getenv("ADAM_DEBUGGER_TAB");
     d->page = PAGE_CPU;
     if (tab && !strcmp(tab, "vdp"))
         d->page = PAGE_VDP;
+    else if (tab && !strcmp(tab, "vram"))
+        d->page = PAGE_VRAM;
     else if (tab && !strcmp(tab, "trace"))
         d->page = PAGE_TRACE;
     SendMessageA(d->tabs, TCM_SETCURSEL, (WPARAM)d->page, 0);

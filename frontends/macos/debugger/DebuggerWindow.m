@@ -15,6 +15,8 @@
 
 #define DISASM_LINES 40
 #define MEM_ROWS 16
+#define VRAM_ROWS 24
+#define POKE_MAX 64
 
 static DebuggerWindow *g_debugger;
 
@@ -78,6 +80,12 @@ static DebuggerWindow *g_debugger;
     NSImageView *_nt, *_pat, *_spr, *_pal;
     NSPopUpButton *_patBank;
     NSTextView *_spriteInfo;
+    NSTextView *_vdpState;
+
+    NSTextField *_vramEntry;
+    NSTextField *_vramStatus;
+    NSTextView *_vramView;
+    uint16_t _vramBase;
 
     NSTimer *_tick;
 }
@@ -344,7 +352,8 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     _nt = [self pixelView:512 height:384];
     _pat = [self pixelView:512 height:128];
     _spr = [self pixelView:256 height:128];
-    _pal = [self pixelView:256 height:16];
+    /* 1:1 with the rendered swatch grid so the index labels stay crisp. */
+    _pal = [self pixelView:ADAMVDP_PAL_W height:ADAMVDP_PAL_H];
     _patBank = [[NSPopUpButton alloc] init];
     [_patBank addItemsWithTitles:@[ @"Bank 0", @"Bank 1", @"Bank 2" ]];
     NSScrollView *spriteScroll;
@@ -368,6 +377,42 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     vdp.alignment = NSLayoutAttributeTop;
     vdp.spacing = 12;
 
+    /* Registers tab: the decoded register/table state beside a VRAM hex
+     * editor. Its own tab rather than more columns on the VDP tab, which
+     * is already three visualizers wide. */
+    NSScrollView *stateScroll;
+    _vdpState = monoView(&stateScroll);
+    [stateScroll.widthAnchor constraintEqualToConstant:620].active = YES;
+    [stateScroll.heightAnchor constraintEqualToConstant:480].active = YES;
+
+    _vramEntry = [[NSTextField alloc] init];
+    _vramEntry.placeholderString = @"addr [bytes...] e.g. 1800: 41 42 43";
+    _vramEntry.target = self;
+    _vramEntry.action = @selector(submitVram:);
+    NSButton *vramPrev = [self button:@"◀" action:@selector(vramPrev:)];
+    NSButton *vramNext = [self button:@"▶" action:@selector(vramNext:)];
+    _vramStatus = [self label:@""];
+    NSStackView *vramRow = [NSStackView
+        stackViewWithViews:@[ _vramEntry, vramPrev, vramNext, _vramStatus ]];
+    vramRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    [_vramEntry.widthAnchor constraintEqualToConstant:300].active = YES;
+    NSScrollView *vramScroll;
+    _vramView = monoView(&vramScroll);
+    [vramScroll.widthAnchor constraintEqualToConstant:640].active = YES;
+    [vramScroll.heightAnchor constraintEqualToConstant:440].active = YES;
+
+    NSStackView *vramCol = [NSStackView stackViewWithViews:@[
+        [self label:@"VRAM (Enter writes; addresses wrap at 16K)"], vramRow,
+        vramScroll
+    ]];
+    vramCol.orientation = NSUserInterfaceLayoutOrientationVertical;
+    vramCol.alignment = NSLayoutAttributeLeading;
+    NSStackView *regsTab = [NSStackView
+        stackViewWithViews:@[ stateScroll, vramCol ]];
+    regsTab.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    regsTab.alignment = NSLayoutAttributeTop;
+    regsTab.spacing = 12;
+
     /* Trace tab */
     NSScrollView *traceScroll;
     _traceView = monoView(&traceScroll);
@@ -381,6 +426,11 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     vdpItem.label = @"VDP";
     vdpItem.view = vdp;
     [tabs addTabViewItem:vdpItem];
+    NSTabViewItem *regsItem =
+        [NSTabViewItem tabViewItemWithViewController:nil];
+    regsItem.label = @"VDP RAM";
+    regsItem.view = regsTab;
+    [tabs addTabViewItem:regsItem];
     NSTabViewItem *traceItem =
         [NSTabViewItem tabViewItemWithViewController:nil];
     traceItem.label = @"Trace";
@@ -640,7 +690,8 @@ static NSTextView *monoView(NSScrollView **scrollOut)
 {
     static adamvdp_snapshot snap;
     static uint8_t nt[256 * 192 * 4], pat[256 * 64 * 4], spr[128 * 64 * 4],
-        pal[16 * 4];
+        pal[ADAMVDP_PAL_W * ADAMVDP_PAL_H * 4];
+    static char stateText[4096];
     adamvdp_sprite info[32];
 
     adamdebug_vdp_snapshot(_dbg, &snap);
@@ -655,18 +706,64 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     _spr.image = imageFromRGBA(spr, 128, 64);
 
     adamvdp_render_palette(&snap, pal);
-    _pal.image = imageFromRGBA(pal, 16, 1);
+    _pal.image = imageFromRGBA(pal, ADAMVDP_PAL_W, ADAMVDP_PAL_H);
 
     NSMutableString *text =
-        [NSMutableString stringWithString:@"##  Y    X  PAT CLR EC   R0-R7: "];
-    for (int i = 0; i < 8; i++)
-        [text appendFormat:@"%02X ", snap.regs[i]];
-    [text appendFormat:@" ST:%02X\n", snap.status];
+        [NSMutableString stringWithString:@"##  Y    X  PAT CLR EC\n"];
     for (int i = 0; i < 32; i++)
         [text appendFormat:@"%02d %3d  %3d  %02X  %2d  %d\n", i, info[i].y,
                            info[i].x, info[i].pattern, info[i].color,
                            info[i].early_clock];
     _spriteInfo.string = text;
+
+    adamvdp_format_state(&snap, stateText, (int)sizeof(stateText));
+    _vdpState.string = @(stateText);
+
+    adamvdp_format_hex(&snap, _vramBase, VRAM_ROWS, stateText,
+                       (int)sizeof(stateText));
+    _vramView.string = @(stateText);
+}
+
+/* One field does both jobs: an address alone scrolls the dump there, an
+ * address followed by hex bytes writes them first ("1800: 41 42 43"). */
+- (void)submitVram:(id)sender
+{
+    (void)sender;
+    uint8_t bytes[POKE_MAX];
+    uint16_t addr = 0;
+    int n = adamvdp_parse_poke(_vramEntry.stringValue.UTF8String, &addr,
+                               bytes, POKE_MAX);
+    if (n < 0) {
+        _vramStatus.stringValue =
+            @"expected: addr [bytes...], e.g. 1800: 41 42";
+        return;
+    }
+    if (n > 0) {
+        adamdebug_vdp_write(_dbg, addr, bytes, n);
+        _vramStatus.stringValue =
+            [NSString stringWithFormat:@"wrote %d byte%s at $%04X", n,
+                                       n == 1 ? "" : "s", addr];
+        _vramEntry.stringValue = @"";
+    } else {
+        _vramStatus.stringValue =
+            [NSString stringWithFormat:@"$%04X", addr];
+    }
+    _vramBase = (uint16_t)(addr & 0x3FF0);
+    [self refreshVdp];
+}
+
+- (void)vramPrev:(id)sender
+{
+    (void)sender;
+    _vramBase = (uint16_t)((_vramBase - VRAM_ROWS * 16) & 0x3FFF);
+    [self refreshVdp];
+}
+
+- (void)vramNext:(id)sender
+{
+    (void)sender;
+    _vramBase = (uint16_t)((_vramBase + VRAM_ROWS * 16) & 0x3FFF);
+    [self refreshVdp];
 }
 
 @end

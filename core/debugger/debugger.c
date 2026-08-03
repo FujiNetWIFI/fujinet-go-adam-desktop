@@ -630,3 +630,39 @@ void adamdebug_vdp_snapshot(adamdebug *d, adamvdp_snapshot *out)
     adamcore_vdp_state(c, out->regs, &out->status, &out->addr);
     memcpy(out->palette565, adamcore_palette565(c), sizeof(out->palette565));
 }
+
+int adamdebug_vdp_read(adamdebug *d, uint16_t addr, uint8_t *dst, int n)
+{
+    adamcore *c = d->session->core;
+    const uint8_t *vram;
+    int i;
+
+    if (!c) {
+        memset(dst, 0, (size_t)n);
+        return 0;
+    }
+    vram = adamcore_vdp_vram(c);
+    for (i = 0; i < n; i++)
+        dst[i] = vram[(addr + i) & 0x3FFF];
+    return n;
+}
+
+int adamdebug_vdp_write(adamdebug *d, uint16_t addr, const uint8_t *src, int n)
+{
+    adamcore *c = d->session->core;
+    uint8_t *vram;
+    int i;
+
+    if (!c)
+        return 0;
+    /* adamcore hands out VRAM read-only and has no poke entry point; the
+     * cast is deliberate rather than a patch to the staged tree (which
+     * cmake/StageAdamcore.cmake regenerates from upstream). Storing into
+     * the array is the whole of a VRAM write -- the address register and
+     * read-ahead latch belong to the port protocol, not to the RAM, so
+     * leaving them alone is what keeps a transfer in flight intact. */
+    vram = (uint8_t *)adamcore_vdp_vram(c);
+    for (i = 0; i < n; i++)
+        vram[(addr + i) & 0x3FFF] = src[i];
+    return n;
+}

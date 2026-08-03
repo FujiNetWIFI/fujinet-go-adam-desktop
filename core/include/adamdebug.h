@@ -125,11 +125,89 @@ typedef struct {
 
 void adamdebug_vdp_snapshot(adamdebug *d, adamvdp_snapshot *out);
 
+/* Live VRAM access, addresses wrapping at 16K. Reads are side-effect free;
+ * writes go straight into the VDP's RAM array without touching the address
+ * register or the read-ahead latch, so poking VRAM cannot desynchronize a
+ * transfer the running program is in the middle of. Both are safe from the
+ * UI thread (a write racing the beam just shows up on the next line, the
+ * same as one from the CPU). */
+int adamdebug_vdp_read(adamdebug *d, uint16_t addr, uint8_t *dst, int n);
+int adamdebug_vdp_write(adamdebug *d, uint16_t addr, const uint8_t *src,
+                        int n);
+
+/* Parses a "poke line": a hex address, then optionally a ':' or '=' and any
+ * number of whitespace/comma-separated hex bytes ("1800", "$1800: 41 42",
+ * "1800 = 4142FF"). Tokens longer than two digits are taken as a run of
+ * bytes so a pasted hex dump works. Returns the byte count (0 when only an
+ * address was given, i.e. "go to"), or -1 if the text does not parse. */
+int adamvdp_parse_poke(const char *text, uint16_t *addr, uint8_t *bytes,
+                       int max);
+
+/* ---- VDP tables / registers ----------------------------------------------- */
+
+typedef enum {
+    ADAMVDP_MODE_GRAPHICS1 = 0,
+    ADAMVDP_MODE_GRAPHICS2,
+    ADAMVDP_MODE_MULTICOLOR,
+    ADAMVDP_MODE_TEXT,
+    ADAMVDP_MODE_INVALID, /* an M1/M2/M3 combination the VDP does not define */
+} adamvdp_mode;
+
+typedef struct {
+    uint16_t base;  /* VRAM address the mode fetches this table from */
+    uint16_t size;  /* bytes the mode actually fetches (0 = mode unused) */
+    uint16_t mask;  /* Graphics II AND-mask over the table index (else 0) */
+} adamvdp_table;
+
+typedef struct {
+    adamvdp_mode mode;
+    const char *mode_name;
+    adamvdp_table name, color, pattern, sprite_attr, sprite_pattern;
+    int display_on;        /* R1 BLANK */
+    int irq_on;            /* R1 IE */
+    int vram_16k;          /* R1 M/S: 16K vs 4K RAM */
+    int ext_video;         /* R0 EXTVID */
+    int sprites_16x16;     /* R1 SIZE */
+    int sprites_magnified; /* R1 MAG */
+    uint8_t backdrop;      /* R7 low nibble */
+    uint8_t text_fg;       /* R7 high nibble (text mode only) */
+} adamvdp_tables;
+
+/* Decodes the register set into the addresses the beam is actually using.
+ * Tables a mode does not fetch come back with size 0. */
+void adamvdp_get_tables(const adamvdp_snapshot *s, adamvdp_tables *out);
+
+/* "Name table", "Sprite attributes", ... for R0-R7. */
+const char *adamvdp_register_name(int reg);
+
+/* One line of decoded detail for register reg (0-7): the bit fields by
+ * name for R0/R1/R7, the resolved address plus extent (and Graphics II
+ * index mask) for the table registers. Returns the length written. */
+int adamvdp_describe_register(const adamvdp_snapshot *s, int reg, char *out,
+                              int max);
+
+/* Same for the read-only status register: interrupt flag, 5th-sprite and
+ * coincidence flags, and the reported sprite number. */
+int adamvdp_describe_status(const adamvdp_snapshot *s, char *out, int max);
+
+/* TMS9918A color names, "Transparent" through "White". */
+const char *adamvdp_color_name(int index);
+
+/* The whole decode as monospace text -- current mode, the table addresses,
+ * then one decoded line per register plus status. Every frontend shows the
+ * identical block; 2K is comfortably enough. Returns the length written. */
+int adamvdp_format_state(const adamvdp_snapshot *s, char *out, int max);
+
+/* A classic hex dump of VRAM: rows of 16 bytes, "ADDR  xx .. xx  ascii",
+ * starting at base (wrapping at 16K). Returns the length written. */
+int adamvdp_format_hex(const adamvdp_snapshot *s, uint16_t base, int rows,
+                       char *out, int max);
+
 /* Decoders render RGBA8888 into caller-provided buffers; both toolkits just
  * wrap the result in a texture/QImage. Sizes are fixed:
  *   nametable: 256x192   patterns: 256x64 (one 32x8-tile bank)
  *   sprites:   128x64 (32 cells of 16x16 in an 8x4 grid)
- *   palette:   16x1 */
+ *   palette:   ADAMVDP_PAL_W x ADAMVDP_PAL_H */
 void adamvdp_render_nametable(const adamvdp_snapshot *s, uint8_t *rgba);
 void adamvdp_render_patterns(const adamvdp_snapshot *s, int bank,
                              uint8_t *rgba);
@@ -143,6 +221,15 @@ typedef struct {
 
 void adamvdp_render_sprites(const adamvdp_snapshot *s, uint8_t *rgba,
                             adamvdp_sprite info[32]);
+
+/* The palette as 16 separated swatches in an 8x2 grid, each labeled with
+ * its hex index and outlined against the gutter so adjacent entries never
+ * read as one block. Entry 0 (transparent) is drawn as a checkerboard. */
+#define ADAMVDP_PAL_CELL 40
+#define ADAMVDP_PAL_COLS 8
+#define ADAMVDP_PAL_ROWS 2
+#define ADAMVDP_PAL_W (ADAMVDP_PAL_CELL * ADAMVDP_PAL_COLS)
+#define ADAMVDP_PAL_H (ADAMVDP_PAL_CELL * ADAMVDP_PAL_ROWS)
 void adamvdp_render_palette(const adamvdp_snapshot *s, uint8_t *rgba);
 
 #ifdef __cplusplus

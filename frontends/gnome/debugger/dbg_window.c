@@ -1,9 +1,10 @@
 /*
  * Debugger window (GTK4/libadwaita): disassembly with breakpoint gutter,
  * editable registers, memory view, breakpoints, instruction trace, and the
- * VDP visualizers (nametable / pattern banks / sprites / palette), all over
- * the shared adamdebug engine. Stop events arrive on the emulator thread
- * and are marshaled here with g_idle_add.
+ * VDP visualizers (nametable / pattern banks / sprites / palette) alongside
+ * a VRAM hex editor and the decoded register/table state, all over the
+ * shared adamdebug engine. Stop events arrive on the emulator thread and
+ * are marshaled here with g_idle_add.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -18,6 +19,9 @@
 
 #define DISASM_LINES 40
 #define MEM_ROWS 16
+#define VRAM_ROWS 16
+#define VRAM_PAGE (VRAM_ROWS * 16)
+#define POKE_MAX 64
 
 typedef struct {
     GtkWindow *win;
@@ -48,6 +52,12 @@ typedef struct {
     GtkPicture *pic_nt, *pic_pat, *pic_spr, *pic_pal;
     GtkDropDown *pat_bank;
     GtkTextView *sprite_info;
+    GtkTextView *vdp_state;
+
+    GtkEntry *vram_entry;
+    GtkLabel *vram_status;
+    GtkTextView *vram_view;
+    uint16_t vram_base;
 
     guint tick_timer;
 } DbgWin;
@@ -228,7 +238,8 @@ static void refresh_vdp(DbgWin *w)
 {
     static adamvdp_snapshot snap;
     static uint8_t nt[256 * 192 * 4], pat[256 * 64 * 4], spr[128 * 64 * 4],
-        pal[16 * 4];
+        pal[ADAMVDP_PAL_W * ADAMVDP_PAL_H * 4];
+    static char text[4096];
     adamvdp_sprite info[32];
     GdkTexture *tex;
     GString *str;
@@ -253,20 +264,24 @@ static void refresh_vdp(DbgWin *w)
     g_object_unref(tex);
 
     adamvdp_render_palette(&snap, pal);
-    tex = texture_from_rgba(pal, 16, 1);
+    tex = texture_from_rgba(pal, ADAMVDP_PAL_W, ADAMVDP_PAL_H);
     gtk_picture_set_paintable(w->pic_pal, GDK_PAINTABLE(tex));
     g_object_unref(tex);
 
-    str = g_string_new("##  Y    X  PAT CLR EC   R0-R7: ");
-    for (i = 0; i < 8; i++)
-        g_string_append_printf(str, "%02X ", snap.regs[i]);
-    g_string_append_printf(str, " ST:%02X\n", snap.status);
+    str = g_string_new("##  Y    X  PAT CLR EC\n");
     for (i = 0; i < 32; i++)
         g_string_append_printf(str, "%02d %3d  %3d  %02X  %2d  %d\n", i,
                                info[i].y, info[i].x, info[i].pattern,
                                info[i].color, info[i].early_clock);
     set_text(w->sprite_info, str->str);
     g_string_free(str, TRUE);
+
+    adamvdp_format_state(&snap, text, (int)sizeof(text));
+    set_text(w->vdp_state, text);
+
+    adamvdp_format_hex(&snap, w->vram_base, VRAM_ROWS, text,
+                       (int)sizeof(text));
+    set_text(w->vram_view, text);
 }
 
 static void refresh_all(DbgWin *w)
@@ -450,6 +465,44 @@ static void on_reg_activate(GtkEntry *entry, gpointer ud)
     }
 }
 
+/* One entry does both jobs: an address alone scrolls the dump there, an
+ * address followed by hex bytes writes them first ("1800: 41 42 43"). */
+static void on_vram_entry(GtkEntry *entry, gpointer ud)
+{
+    DbgWin *w = ud;
+    uint8_t bytes[POKE_MAX];
+    uint16_t addr;
+    char msg[96];
+    int n = adamvdp_parse_poke(gtk_editable_get_text(GTK_EDITABLE(entry)),
+                              &addr, bytes, POKE_MAX);
+
+    if (n < 0) {
+        gtk_label_set_text(w->vram_status,
+                           "expected: addr [bytes...], e.g. 1800: 41 42");
+        return;
+    }
+    if (n > 0) {
+        adamdebug_vdp_write(w->dbg, addr, bytes, n);
+        g_snprintf(msg, sizeof(msg), "wrote %d byte%s at $%04X", n,
+                   n == 1 ? "" : "s", addr);
+        gtk_editable_set_text(GTK_EDITABLE(entry), "");
+    } else {
+        g_snprintf(msg, sizeof(msg), "$%04X", addr);
+    }
+    gtk_label_set_text(w->vram_status, msg);
+    w->vram_base = (uint16_t)(addr & 0x3FF0);
+    refresh_vdp(w);
+}
+
+static void on_vram_page(GtkButton *btn, gpointer ud)
+{
+    DbgWin *w = ud;
+    int delta = GPOINTER_TO_INT(
+        g_object_get_data(G_OBJECT(btn), "delta"));
+    w->vram_base = (uint16_t)((w->vram_base + delta * VRAM_PAGE) & 0x3FFF);
+    refresh_vdp(w);
+}
+
 static void on_trace_toggle(GObject *sw, GParamSpec *pspec, gpointer ud)
 {
     DbgWin *w = ud;
@@ -512,7 +565,7 @@ static GtkWidget *mono_view(GtkTextView **out, gboolean wrap)
     gtk_text_view_set_editable(GTK_TEXT_VIEW(view), FALSE);
     gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view),
-                                wrap ? GTK_WRAP_CHAR : GTK_WRAP_NONE);
+                                wrap ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
     gtk_text_view_set_left_margin(GTK_TEXT_VIEW(view), 6);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), view);
     gtk_widget_set_vexpand(scroll, TRUE);
@@ -674,7 +727,10 @@ void adam_debugger_show(GtkWindow *parent, adamsession *session)
     w->pic_spr = GTK_PICTURE(gtk_picture_new());
     gtk_widget_set_size_request(GTK_WIDGET(w->pic_spr), 256, 128);
     w->pic_pal = GTK_PICTURE(gtk_picture_new());
-    gtk_widget_set_size_request(GTK_WIDGET(w->pic_pal), 256, 16);
+    /* 1:1 with the rendered swatch grid so the index labels stay crisp. */
+    gtk_widget_set_size_request(GTK_WIDGET(w->pic_pal), ADAMVDP_PAL_W,
+                                ADAMVDP_PAL_H);
+    gtk_widget_set_halign(GTK_WIDGET(w->pic_pal), GTK_ALIGN_START);
     {
         const char *const banks[] = {"Bank 0", "Bank 1", "Bank 2", NULL};
         w->pat_bank = GTK_DROP_DOWN(gtk_drop_down_new_from_strings(banks));
@@ -701,6 +757,48 @@ void adam_debugger_show(GtkWindow *parent, adamsession *session)
     gtk_grid_attach(GTK_GRID(vdp_grid), labeled("Palette",
                                                 GTK_WIDGET(w->pic_pal)),
                     0, 2, 1, 1);
+
+    /* Decoded registers + the table addresses the beam is fetching from.
+     * Wrapped, so a narrow window folds the one long line (R1) instead of
+     * hiding its tail behind a horizontal scrollbar. */
+    scroll = mono_view(&w->vdp_state, TRUE);
+    gtk_widget_set_size_request(scroll, 560, 520);
+    gtk_grid_attach(GTK_GRID(vdp_grid),
+                    labeled("Registers & tables", scroll), 1, 2, 1, 1);
+
+    /* VRAM hex editor. */
+    {
+        GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+        GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        GtkWidget *prev = gtk_button_new_with_label("\xe2\x97\x80");
+        GtkWidget *next = gtk_button_new_with_label("\xe2\x96\xb6");
+
+        w->vram_entry = GTK_ENTRY(gtk_entry_new());
+        gtk_entry_set_placeholder_text(w->vram_entry,
+                                       "addr [bytes...] e.g. 1800: 41 42 43");
+        gtk_widget_set_hexpand(GTK_WIDGET(w->vram_entry), TRUE);
+        g_signal_connect(w->vram_entry, "activate",
+                         G_CALLBACK(on_vram_entry), w);
+        g_object_set_data(G_OBJECT(prev), "delta", GINT_TO_POINTER(-1));
+        g_object_set_data(G_OBJECT(next), "delta", GINT_TO_POINTER(1));
+        g_signal_connect(prev, "clicked", G_CALLBACK(on_vram_page), w);
+        g_signal_connect(next, "clicked", G_CALLBACK(on_vram_page), w);
+        w->vram_status = GTK_LABEL(gtk_label_new(""));
+        gtk_label_set_xalign(w->vram_status, 0);
+
+        gtk_box_append(GTK_BOX(bar), GTK_WIDGET(w->vram_entry));
+        gtk_box_append(GTK_BOX(bar), prev);
+        gtk_box_append(GTK_BOX(bar), next);
+        gtk_box_append(GTK_BOX(bar), GTK_WIDGET(w->vram_status));
+        gtk_box_append(GTK_BOX(vbox), bar);
+        scroll = mono_view(&w->vram_view, FALSE);
+        gtk_widget_set_size_request(scroll, -1, 280);
+        gtk_box_append(GTK_BOX(vbox), scroll);
+        gtk_grid_attach(GTK_GRID(vdp_grid),
+                        labeled("VRAM (Enter writes; addresses wrap at 16K)",
+                                vbox),
+                        0, 3, 2, 1);
+    }
 
     /* Trace page */
     scroll = mono_view(&w->trace_view, FALSE);

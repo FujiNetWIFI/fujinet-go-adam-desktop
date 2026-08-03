@@ -16,6 +16,7 @@
 #include <QDockWidget>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
@@ -23,6 +24,7 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QShortcut>
 #include <QTextBlock>
 #include <QTimer>
@@ -32,6 +34,9 @@
 namespace {
 constexpr int kDisasmLines = 40;
 constexpr int kMemRows = 16;
+constexpr int kVramRows = 16;
+constexpr int kVramPage = kVramRows * 16;
+constexpr int kPokeMax = 64;
 const char *const kRegNames[8] = {"AF", "BC", "DE", "HL",
                                   "IX", "IY", "SP", "PC"};
 
@@ -307,17 +312,75 @@ void DebuggerWindow::buildUi()
     m_spriteInfo->setMinimumWidth(300);
     vdpGrid->addWidget(m_spriteInfo, 1, 3, 3, 1);
     vdpGrid->addWidget(new QLabel(QStringLiteral("Palette")), 4, 0);
-    vdpGrid->addWidget(make_pic(&m_pal, 256, 16), 5, 0);
+    /* 1:1 with the rendered swatch grid so the index labels stay crisp
+     * (make_pic's scaled contents would smear them). */
+    m_pal = new QLabel;
+    m_pal->setFixedSize(ADAMVDP_PAL_W, ADAMVDP_PAL_H);
+    /* Pinned to the top-left of its cell: the row is as tall as the state
+     * pane beside it, and a centered swatch grid drifts away from its
+     * own label. */
+    vdpGrid->addWidget(m_pal, 5, 0, Qt::AlignTop | Qt::AlignLeft);
+
+    /* Decoded registers + the table addresses the beam is fetching from. */
+    vdpGrid->addWidget(new QLabel(QStringLiteral("Registers & tables")), 4,
+                       1);
+    m_vdpState = monoView();
+    m_vdpState->setMinimumSize(560, 300);
+    vdpGrid->addWidget(m_vdpState, 5, 1, 1, 3);
+
+    /* Give the slack to the visualizers; otherwise QGridLayout spreads it
+     * evenly and every label floats away from what it labels. */
+    vdpGrid->setRowStretch(3, 1);
 
     auto *vdpDock = new QDockWidget(QStringLiteral("VDP"), this);
-    vdpDock->setWidget(vdp);
+    /* The page can outgrow the dock on a short screen, so it scrolls
+     * rather than forcing the dock open. */
+    auto *vdpScroll = new QScrollArea;
+    vdpScroll->setWidgetResizable(true);
+    vdpScroll->setWidget(vdp);
+    vdpDock->setWidget(vdpScroll);
     addDockWidget(Qt::BottomDockWidgetArea, vdpDock);
+
+    /* VRAM hex editor in its own tab: a dump plus enough room to read it
+     * does not fit beside the visualizers at the dock's natural height. */
+    auto *vram = new QWidget;
+    auto *vramLayout = new QVBoxLayout(vram);
+    {
+        auto *bar = new QWidget;
+        auto *barLayout = new QHBoxLayout(bar);
+        barLayout->setContentsMargins(0, 0, 0, 0);
+        m_vramEntry = new QLineEdit;
+        m_vramEntry->setPlaceholderText(
+            QStringLiteral("addr [bytes...] e.g. 1800: 41 42 43"));
+        connect(m_vramEntry, &QLineEdit::returnPressed, this,
+                &DebuggerWindow::vramSubmit);
+        auto *prev = new QPushButton(QStringLiteral("◀"));
+        auto *next = new QPushButton(QStringLiteral("▶"));
+        prev->setFixedWidth(40);
+        next->setFixedWidth(40);
+        connect(prev, &QPushButton::clicked, this, [this] { vramPage(-1); });
+        connect(next, &QPushButton::clicked, this, [this] { vramPage(1); });
+        m_vramStatus = new QLabel;
+        barLayout->addWidget(m_vramEntry, 1);
+        barLayout->addWidget(prev);
+        barLayout->addWidget(next);
+        barLayout->addWidget(m_vramStatus);
+        vramLayout->addWidget(
+            new QLabel(QStringLiteral("Enter writes; addresses wrap at 16K")));
+        vramLayout->addWidget(bar);
+        m_vramView = monoView();
+        vramLayout->addWidget(m_vramView, 1);
+    }
+    auto *vramDock = new QDockWidget(QStringLiteral("VRAM"), this);
+    vramDock->setWidget(vram);
+    addDockWidget(Qt::BottomDockWidgetArea, vramDock);
 
     m_traceView = monoView();
     auto *traceDock = new QDockWidget(QStringLiteral("Trace"), this);
     traceDock->setWidget(m_traceView);
     addDockWidget(Qt::BottomDockWidgetArea, traceDock);
-    tabifyDockWidget(vdpDock, traceDock);
+    tabifyDockWidget(vdpDock, vramDock);
+    tabifyDockWidget(vramDock, traceDock);
     vdpDock->raise();
 }
 
@@ -501,7 +564,7 @@ void DebuggerWindow::refreshVdp()
 {
     static adamvdp_snapshot snap;
     static uint8_t nt[256 * 192 * 4], pat[256 * 64 * 4], spr[128 * 64 * 4],
-        pal[16 * 4];
+        pal[ADAMVDP_PAL_W * ADAMVDP_PAL_H * 4];
     adamvdp_sprite info[32];
 
     adamdebug_vdp_snapshot(m_dbg, &snap);
@@ -519,15 +582,12 @@ void DebuggerWindow::refreshVdp()
         QImage(spr, 128, 64, 128 * 4, QImage::Format_RGBA8888)));
 
     adamvdp_render_palette(&snap, pal);
-    m_pal->setPixmap(QPixmap::fromImage(
-        QImage(pal, 16, 1, 16 * 4, QImage::Format_RGBA8888)));
+    m_pal->setPixmap(QPixmap::fromImage(QImage(pal, ADAMVDP_PAL_W,
+                                               ADAMVDP_PAL_H,
+                                               ADAMVDP_PAL_W * 4,
+                                               QImage::Format_RGBA8888)));
 
-    QString text = QStringLiteral("##  Y    X  PAT CLR EC   R0-R7: ");
-    for (int i = 0; i < 8; i++)
-        text += QStringLiteral("%1 ").arg(snap.regs[i], 2, 16,
-                                          QLatin1Char('0')).toUpper();
-    text += QStringLiteral(" ST:%1\n").arg(snap.status, 2, 16,
-                                           QLatin1Char('0')).toUpper();
+    QString text = QStringLiteral("##  Y    X  PAT CLR EC\n");
     for (int i = 0; i < 32; i++)
         text += QStringLiteral("%1 %2 %3  %4  %5  %6\n")
                     .arg(i, 2)
@@ -537,4 +597,49 @@ void DebuggerWindow::refreshVdp()
                     .arg(info[i].color, 3)
                     .arg(info[i].early_clock);
     m_spriteInfo->setPlainText(text);
+
+    static char state[4096];
+    adamvdp_format_state(&snap, state, int(sizeof(state)));
+    m_vdpState->setPlainText(QString::fromLatin1(state));
+
+    adamvdp_format_hex(&snap, m_vramBase, kVramRows, state,
+                       int(sizeof(state)));
+    m_vramView->setPlainText(QString::fromLatin1(state));
+}
+
+/* One entry does both jobs: an address alone scrolls the dump there, an
+ * address followed by hex bytes writes them first ("1800: 41 42 43"). */
+void DebuggerWindow::vramSubmit()
+{
+    uint8_t bytes[kPokeMax];
+    quint16 addr = 0;
+    const int n = adamvdp_parse_poke(m_vramEntry->text().toUtf8().constData(),
+                                     &addr, bytes, kPokeMax);
+    if (n < 0) {
+        m_vramStatus->setText(
+            QStringLiteral("expected: addr [bytes...], e.g. 1800: 41 42"));
+        return;
+    }
+    if (n > 0) {
+        adamdebug_vdp_write(m_dbg, addr, bytes, n);
+        m_vramStatus->setText(QStringLiteral("wrote %1 byte%2 at $%3")
+                                  .arg(n)
+                                  .arg(n == 1 ? QString()
+                                              : QStringLiteral("s"))
+                                  .arg(addr, 4, 16, QLatin1Char('0'))
+                                  .toUpper());
+        m_vramEntry->clear();
+    } else {
+        m_vramStatus->setText(QStringLiteral("$%1")
+                                  .arg(addr, 4, 16, QLatin1Char('0'))
+                                  .toUpper());
+    }
+    m_vramBase = quint16(addr & 0x3FF0);
+    refreshVdp();
+}
+
+void DebuggerWindow::vramPage(int delta)
+{
+    m_vramBase = quint16((m_vramBase + delta * kVramPage) & 0x3FFF);
+    refreshVdp();
 }

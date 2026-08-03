@@ -40,6 +40,8 @@ private:
     void onStopped(int reason, quint16 pc);
     void pauseContinue();
     bool parseAddr(const QString &text, quint16 *out);
+    void vramSubmit();
+    void vramPage(int delta);
 
     adamsession *m_session;
     adamdebug *m_dbg;
@@ -64,6 +66,12 @@ private:
     QLabel *m_nt, *m_pat, *m_spr, *m_pal;
     QComboBox *m_patBank;
     QPlainTextEdit *m_spriteInfo;
+    QPlainTextEdit *m_vdpState;
+
+    QLineEdit *m_vramEntry;
+    QLabel *m_vramStatus;
+    QPlainTextEdit *m_vramView;
+    quint16 m_vramBase = 0;
 
     QTimer *m_tick;
 };

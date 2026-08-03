@@ -214,6 +214,48 @@ int main(void)
         }
     }
 
+    /* VRAM poke/peek against the live VDP, including the 16K wrap: what the
+     * debugger writes is what the next snapshot (and so the visualizers)
+     * sees. Paused, so SmartWriter cannot race the probe. */
+    {
+        static const uint8_t probe[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+        static adamvdp_snapshot snap;
+        uint8_t saved[4], back[4];
+        char text[4096];
+
+        adamdebug_vdp_read(d, 0x3FFE, saved, 4);
+        adamdebug_vdp_write(d, 0x3FFE, probe, 4);
+        adamdebug_vdp_read(d, 0x3FFE, back, 4);
+        if (memcmp(back, probe, 4) != 0) {
+            fprintf(stderr, "debug_boot: VRAM write did not read back\n");
+            return 1;
+        }
+        adamdebug_vdp_snapshot(d, &snap);
+        if (snap.vram[0x3FFE] != 0xDE || snap.vram[0x3FFF] != 0xAD ||
+            snap.vram[0x0000] != 0xBE || snap.vram[0x0001] != 0xEF) {
+            fprintf(stderr, "debug_boot: VRAM write missing from snapshot\n");
+            return 1;
+        }
+        adamdebug_vdp_write(d, 0x3FFE, saved, 4);
+
+        /* The decode SmartWriter's screen produces must be a real mode with
+         * a plausible name table, not a blank or nonsense readout. */
+        {
+            adamvdp_tables t;
+            adamvdp_get_tables(&snap, &t);
+            if (t.mode == ADAMVDP_MODE_INVALID || t.name.size == 0) {
+                fprintf(stderr, "debug_boot: VDP mode decoded as %s\n",
+                        t.mode_name);
+                return 1;
+            }
+            adamvdp_format_state(&snap, text, (int)sizeof(text));
+            if (!strstr(text, "Name table") || !strstr(text, "R7 $")) {
+                fprintf(stderr, "debug_boot: VDP state text incomplete\n");
+                return 1;
+            }
+        }
+    }
+
     adamdebug_resume(d);
     adamsession_stop(s);
     adamsession_free(s);
