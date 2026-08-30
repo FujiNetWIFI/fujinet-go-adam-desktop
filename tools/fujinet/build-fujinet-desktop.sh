@@ -371,16 +371,6 @@ patch("lib/device/adamnet/adamFuji.cpp", [
     ),
 ])
 
-# --- portability: `uint` is a glibc/BSD spelling, absent on MinGW ----------
-# The ADAM modem device is the only place the PC build uses it; it has
-# simply never been compiled for Windows before.
-patch("lib/device/adamnet/modem.h", [
-    (
-        '    uint modemBaud = 300;',
-        '    unsigned int modemBaud = 300;',
-    ),
-])
-
 # --- dist target: no ldd DLL harvesting for the embedded Windows build ----
 # The stock Windows "dist" target copies the executable's dependent DLLs by
 # parsing ldd output. The embedded library links its runtimes statically and
@@ -501,11 +491,12 @@ patch("fujinet_pc.cmake", [
     (
         'set(_MBEDTLS_ROOT_HINTS $ENV{MBEDTLS_ROOT_DIR} ${MBEDTLS_ROOT_DIR})\n'
         'set(_MBEDTLS_ROOT_PATHS "$ENV{PROGRAMFILES}/libmbedtls")\n'
-        'set(_MBEDTLS_ROOT_HINTS_AND_PATHS HINTS ${_MBEDTLS_ROOT_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
-        'find_library(MBEDTLS_STATIC_LIB libmbedtls.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        'find_library(MBEDX509_STATIC_LIB libmbedx509.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        'find_library(MBEDCRYPTO_STATIC_LIB libmbedcrypto.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        'find_path(MBEDTLS_INCLUDE_DIR mbedtls/ssl.h HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS} PATH_SUFFIXES include)\n',
+        'set(_MBEDTLS_LIB_HINTS ${_MBEDTLS_ROOT_HINTS} /usr/lib/mbedtls3 /usr/lib64/mbedtls3 /usr/local/lib/mbedtls3)\n'
+        'set(_MBEDTLS_INC_HINTS ${_MBEDTLS_ROOT_HINTS} /usr/include/mbedtls3 /usr/local/include/mbedtls3)\n'
+        'find_library(MBEDTLS_STATIC_LIB libmbedtls.a HINTS ${_MBEDTLS_LIB_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
+        'find_library(MBEDX509_STATIC_LIB libmbedx509.a HINTS ${_MBEDTLS_LIB_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
+        'find_library(MBEDCRYPTO_STATIC_LIB libmbedcrypto.a HINTS ${_MBEDTLS_LIB_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
+        'find_path(MBEDTLS_INCLUDE_DIR mbedtls/sha256.h HINTS ${_MBEDTLS_INC_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS} PATH_SUFFIXES include)\n',
         'if(DEFINED ENV{MBEDTLS_ROOT_DIR} AND EXISTS "$ENV{MBEDTLS_ROOT_DIR}/include/mbedtls/ssl.h")\n'
         '    # The library directory under the root is whatever GNUInstallDirs\n'
         '    # chose when mbedTLS was installed there: lib, lib64 (flatpak\n'
@@ -527,11 +518,12 @@ patch("fujinet_pc.cmake", [
         'else()\n'
         '    set(_MBEDTLS_ROOT_HINTS $ENV{MBEDTLS_ROOT_DIR} ${MBEDTLS_ROOT_DIR})\n'
         '    set(_MBEDTLS_ROOT_PATHS "$ENV{PROGRAMFILES}/libmbedtls")\n'
-        '    set(_MBEDTLS_ROOT_HINTS_AND_PATHS HINTS ${_MBEDTLS_ROOT_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
-        '    find_library(MBEDTLS_STATIC_LIB libmbedtls.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        '    find_library(MBEDX509_STATIC_LIB libmbedx509.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        '    find_library(MBEDCRYPTO_STATIC_LIB libmbedcrypto.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        '    find_path(MBEDTLS_INCLUDE_DIR mbedtls/ssl.h HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS} PATH_SUFFIXES include)\n'
+        '    set(_MBEDTLS_LIB_HINTS ${_MBEDTLS_ROOT_HINTS} /usr/lib/mbedtls3 /usr/lib64/mbedtls3 /usr/local/lib/mbedtls3)\n'
+        '    set(_MBEDTLS_INC_HINTS ${_MBEDTLS_ROOT_HINTS} /usr/include/mbedtls3 /usr/local/include/mbedtls3)\n'
+        '    find_library(MBEDTLS_STATIC_LIB libmbedtls.a HINTS ${_MBEDTLS_LIB_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
+        '    find_library(MBEDX509_STATIC_LIB libmbedx509.a HINTS ${_MBEDTLS_LIB_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
+        '    find_library(MBEDCRYPTO_STATIC_LIB libmbedcrypto.a HINTS ${_MBEDTLS_LIB_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
+        '    find_path(MBEDTLS_INCLUDE_DIR mbedtls/sha256.h HINTS ${_MBEDTLS_INC_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS} PATH_SUFFIXES include)\n'
         'endif()\n',
     ),
 ])

@@ -43,6 +43,22 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.8" date="2026-08-29">
+      <description>
+        <p>
+          The bundled FujiNet runtime moves up to the current firmware. The
+          web UI gains an optional global password and an SD card file
+          manager; N: gains the CALENDAR, GCAL and ICAL protocols; the CONFIG
+          slot-assignment screen shows the right filenames again; opening an
+          AdamNet network connection no longer crashes on a null device; and
+          a zero-length app key write clears the key instead of failing.
+        </p>
+        <p>
+          The runtime also builds again on systems that ship Mbed TLS 4.x,
+          which no longer carries the legacy crypto headers it needs.
+        </p>
+      </description>
+    </release>
     <release version="0.7.7" date="2026-08-02">
       <description>
         <p>
