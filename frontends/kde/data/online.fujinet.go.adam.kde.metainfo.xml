@@ -43,6 +43,20 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.9" date="2026-08-30">
+      <description>
+        <p>
+          Fixes N: opens on AdamNet carrying the padding that follows the
+          device spec. The client libraries send a fixed-size command block,
+          so the URL arrives with the rest of the field after it; the runtime
+          now stops at the end of the string, as every other bus does. A
+          protocol that reads the device spec byte for byte — the new
+          CALENDAR, GCAL and ICAL protocols do — saw the padding as part of
+          the URL, so a GCAL day view was fetched as a calendar named after
+          its own date and came back empty.
+        </p>
+      </description>
+    </release>
     <release version="0.7.8" date="2026-08-29">
       <description>
         <p>

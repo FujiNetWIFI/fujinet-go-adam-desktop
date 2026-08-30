@@ -132,5 +132,5 @@ modules:
         dest: third_party/adamcore
       - type: git
         url: https://github.com/FujiNetWIFI/fujinet-firmware
-        commit: a4b35d185230213b61c7f64a570d6bcdb0d0a56e
+        commit: a7a4fd3a3bde33fd06f797a2af9d3fd8257254b4
         dest: third_party/fujinet-firmware
