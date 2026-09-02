@@ -128,7 +128,7 @@ modules:
           - tools/fujinet/work
       - type: git
         url: https://github.com/tschak909/adamcore
-        commit: d37f05596931859d41d4e4d267531509a3d7f2f3
+        commit: 2fd4ff058e65bd181f724e853e1b81011e060577
         dest: third_party/adamcore
       - type: git
         url: https://github.com/FujiNetWIFI/fujinet-firmware

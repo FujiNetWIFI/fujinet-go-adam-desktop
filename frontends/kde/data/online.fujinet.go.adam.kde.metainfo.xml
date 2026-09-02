@@ -43,6 +43,34 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.8.0" date="2026-09-02">
+      <description>
+        <p>
+          FujiNet is far quicker to talk to. Listing a directory in CONFIG used
+          to stop between every entry, and an EOS cold boot paused for several
+          seconds right after the bus reset. Neither happens on a real ADAM,
+          and both were faults in how this emulator drove the AdamNet link
+          rather than anything in FujiNet itself.
+        </p>
+        <p>
+          Directory entries now arrive about five times faster. Every FujiNet
+          command was preceded by a probe asking the device whether it had a
+          leftover response to discard; the device answers that probe in a way
+          the probe could not interpret, so it always ran to its full timeout —
+          a quarter of a second added to each entry. The probe is gone, as it
+          is on real hardware, and command replies are now collected as soon as
+          they arrive instead of on the next emulated frame.
+        </p>
+        <p>
+          Cold boot no longer stalls. The ADAM asks every bus address in turn
+          who is there, and the addresses FujiNet does not answer for were each
+          given the long grace period meant for a device that is present but
+          still starting up. Once FujiNet has shown it is responding, silence
+          from an address is now taken to mean nothing is attached, which is
+          what it means.
+        </p>
+      </description>
+    </release>
     <release version="0.7.11" date="2026-09-02">
       <description>
         <p>
