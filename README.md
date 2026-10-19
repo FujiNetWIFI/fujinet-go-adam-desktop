@@ -52,7 +52,10 @@ Breakpoints, pause/step into/over/out, run-to, instruction history
 (generated from Richard F. Drushel's EOS-5 disassembly, the eoslib
 jump-table names, and the os7lib listing — see `tools/symbols/`), memory
 and register editing while paused, and live VDP views: nametable, pattern
-banks, sprites (with SAT decode), and palette.
+banks, sprites (with SAT decode), and palette. The **FujiNet** tab shows
+every AdamNet packet between the ADAM and FujiNet, both ways, named and in
+hex, with the BoIP link's state beside it; it records from launch, and
+repeats (the idle keepalive, a poll) are folded into one line with a count.
 
 Keys: `F5` pause/continue · `F7` step into · `F8` step over ·
 `Shift+F8` step out · click a disassembly line to toggle a breakpoint.
@@ -126,7 +129,7 @@ Useful environment switches: `ADAM_PACE_LOG=1` (per-second frame pacing
 diagnostics), `FUJINET_QUIET_BLOCKS=1` (suppress per-block disk log
 lines), `FUJINET_WEBUI_BIND=addr:port` (force the web UI to a fixed bind
 instead of the random free port picked each run), `ADAM_OPEN_DEBUGGER=1`,
-`ADAM_DEBUGGER_TAB=vdp|trace` (debugger start tab).
+`ADAM_DEBUGGER_TAB=vdp|trace|fujinet` (debugger start tab).
 
 The web admin normally binds a random free loopback port each run (the
 FujiNet Configuration window always points at whichever one was picked) so a

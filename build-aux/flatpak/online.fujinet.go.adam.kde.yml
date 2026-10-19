@@ -163,11 +163,12 @@ modules:
           - build-gnome
           - build-kde
           - build-win
+          - core/adamcore-generated
           - third_party
           - tools/fujinet/work
       - type: git
         url: https://github.com/tschak909/adamcore
-        commit: 2fd4ff058e65bd181f724e853e1b81011e060577
+        commit: f19418fdbc32e9774df2eaf352398ee22e70f426
         dest: third_party/adamcore
       - type: git
         url: https://github.com/FujiNetWIFI/fujinet-firmware

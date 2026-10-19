@@ -40,27 +40,19 @@ else()
   )
 endif()
 
-# adamcore's socket helpers (net.h): POSIX sockets everywhere, Winsock on
-# Windows. Both backends come from adamcore itself -- the desktop tree
-# carried a stand-in net_win32.c until upstream grew one (adamcore cd38ead).
-if(WIN32)
-  set(ADAMCORE_NET_SRC "${ADAMCORE_GEN}/src/net_win32.c")
-else()
-  set(ADAMCORE_NET_SRC "${ADAMCORE_GEN}/src/net_posix.c")
+# The staged adamcore translation units. adamcore ships the list itself, so
+# a source added upstream cannot silently break the link here, and
+# adamcore_sources() picks the socket backend (net.h) for the platform.
+if(NOT EXISTS "${ADAMCORE_GEN}/adamcore-sources.cmake")
+  message(FATAL_ERROR
+    "The staged adamcore has no adamcore-sources.cmake: it predates the "
+    "source list. Re-stage from a newer checkout with -DADAMCORE_RESTAGE=ON.")
 endif()
+include("${ADAMCORE_GEN}/adamcore-sources.cmake")
+adamcore_sources(ADAMCORE_SOURCES ROOT "${ADAMCORE_GEN}")
 
 add_library(adamsession STATIC
-  # staged adamcore
-  ${ADAMCORE_GEN}/src/z80.c
-  ${ADAMCORE_GEN}/src/tms9928a.c
-  ${ADAMCORE_GEN}/src/sn76489.c
-  ${ADAMCORE_GEN}/src/machine.c
-  ${ADAMCORE_GEN}/src/cart.c
-  ${ADAMCORE_GEN}/src/adamnet.c
-  ${ADAMCORE_GEN}/src/boip.c
-  ${ADAMCORE_NET_SRC}
-  ${ADAMCORE_GEN}/src/palette.c
-  ${ADAMCORE_GEN}/src/debug.c
+  ${ADAMCORE_SOURCES}
   # session layer
   src/session.c
   src/settings.c
@@ -70,6 +62,7 @@ add_library(adamsession STATIC
   src/gamepad_sdl.c
   src/fujinet_runtime.c
   debugger/debugger.c
+  debugger/fujitrace.c
   debugger/z80dasm.c
   debugger/symbols.c
   debugger/symbols_builtin.c
@@ -129,12 +122,17 @@ target_include_directories(gamepad_map_test PRIVATE src)
 add_executable(vdp_decode_test tests/vdp_decode_test.c)
 target_link_libraries(vdp_decode_test adamsession)
 
+add_executable(fujitrace_test tests/fujitrace_test.c)
+target_link_libraries(fujitrace_test adamsession)
+target_include_directories(fujitrace_test PRIVATE debugger)
+
 add_test(NAME input COMMAND input_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME debug_boot COMMAND debug_boot_test)
 add_test(NAME gamepad_map COMMAND gamepad_map_test)
 add_test(NAME vdp_decode COMMAND vdp_decode_test)
+add_test(NAME fujitrace COMMAND fujitrace_test)
 set_tests_properties(boot_smoke debug_boot gamepad_map
                      PROPERTIES SKIP_RETURN_CODE 77)
 
@@ -144,7 +142,7 @@ set_tests_properties(boot_smoke debug_boot gamepad_map
 # on a bare Windows box, or under wine when cross-compiling.
 if(WIN32)
   foreach(_t input_test boot_smoke dasm_test debug_boot_test
-             gamepad_probe gamepad_map_test vdp_decode_test)
+             gamepad_probe gamepad_map_test vdp_decode_test fujitrace_test)
     target_link_options(${_t} PRIVATE -static -static-libgcc -static-libstdc++)
   endforeach()
 endif()

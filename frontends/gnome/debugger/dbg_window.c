@@ -1,10 +1,11 @@
 /*
  * Debugger window (GTK4/libadwaita): disassembly with breakpoint gutter,
- * editable registers, memory view, breakpoints, instruction trace, and the
+ * editable registers, memory view, breakpoints, instruction trace, the
  * VDP visualizers (nametable / pattern banks / sprites / palette) alongside
- * a VRAM hex editor and the decoded register/table state, all over the
- * shared adamdebug engine. Stop events arrive on the emulator thread and
- * are marshaled here with g_idle_add.
+ * a VRAM hex editor and the decoded register/table state, and the AdamNet
+ * packets to and from FujiNet, all over the shared adamdebug engine. Stop
+ * events arrive on the emulator thread and are marshaled here with
+ * g_idle_add.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -22,6 +23,10 @@
 #define VRAM_ROWS 16
 #define VRAM_PAGE (VRAM_ROWS * 16)
 #define POKE_MAX 64
+#define FUJI_MAX 512
+
+/* Notebook pages; ADAM_DEBUGGER_TAB picks one by name. */
+enum { PAGE_CPU, PAGE_VDP, PAGE_TRACE, PAGE_FUJINET };
 
 typedef struct {
     GtkWindow *win;
@@ -59,6 +64,13 @@ typedef struct {
     GtkTextView *vram_view;
     uint16_t vram_base;
 
+    GtkNotebook *notebook;
+    GtkLabel *fuji_note;
+    GtkTextView *fuji_text, *fuji_state;
+    int fuji_count;     /* entries in the log as last built, -1 = never */
+    uint64_t fuji_last; /* serial of its newest entry */
+    int fuji_ticks;
+
     guint tick_timer;
 } DbgWin;
 
@@ -70,6 +82,86 @@ static const char *const reg_names[8] = {"AF", "BC", "DE", "HL",
 static void set_text(GtkTextView *view, const char *text)
 {
     gtk_text_buffer_set_text(gtk_text_view_get_buffer(view), text, -1);
+}
+
+static GtkAdjustment *vadj(GtkTextView *view)
+{
+    GtkWidget *parent = gtk_widget_get_parent(GTK_WIDGET(view));
+    return GTK_IS_SCROLLED_WINDOW(parent)
+               ? gtk_scrolled_window_get_vadjustment(
+                     GTK_SCROLLED_WINDOW(parent))
+               : NULL;
+}
+
+static gboolean at_end(GtkAdjustment *adj)
+{
+    return gtk_adjustment_get_value(adj) + gtk_adjustment_get_page_size(adj) >=
+           gtk_adjustment_get_upper(adj) - 2.0;
+}
+
+/* A log follows its end while its reader is there. New text grows the view
+ * only once it is laid out (or its page first shows), so the end is pinned
+ * whenever the view's height changes; whether to follow is decided as text
+ * arrives. */
+static gboolean following(GtkTextView *view)
+{
+    return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(view), "follow")) != 0;
+}
+
+static void on_log_resized(GtkAdjustment *adj, gpointer view)
+{
+    if (following(view))
+        gtk_adjustment_set_value(adj, gtk_adjustment_get_upper(adj) -
+                                          gtk_adjustment_get_page_size(adj));
+}
+
+static void make_log(GtkTextView *view)
+{
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+    g_signal_connect(vadj(view), "changed", G_CALLBACK(on_log_resized), view);
+}
+
+/* Before new text: follow if the reader is at the end (or never looked). */
+static void log_note_reader(GtkTextView *view)
+{
+    GtkAdjustment *adj = vadj(view);
+    g_object_set_data(G_OBJECT(view), "follow",
+                      GINT_TO_POINTER(gtk_adjustment_get_page_size(adj) <= 0.0 ||
+                                      at_end(adj)));
+}
+
+static void log_to_end(GtkTextView *view)
+{
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+    on_log_resized(vadj(view), view);
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void set_text_at(GtkTextView *view, const char *text, gboolean follow)
+{
+    GtkTextBuffer *b = gtk_text_view_get_buffer(view);
+    GtkAdjustment *adj = vadj(view);
+    GtkTextMark *mark;
+    GtkTextIter it;
+    int top = 0;
+
+    if (!follow && adj && gtk_adjustment_get_value(adj) > 0.0) {
+        gtk_text_view_get_line_at_y(view, &it,
+                                    (int)gtk_adjustment_get_value(adj), NULL);
+        top = gtk_text_iter_get_line(&it);
+    }
+    gtk_text_buffer_set_text(b, text, -1);
+    if (follow) {
+        log_to_end(view);
+        return;
+    }
+    if (top <= 0) return;
+    /* scroll_to_mark waits for the new text's layout */
+    gtk_text_buffer_get_iter_at_line(b, &it, top);
+    mark = gtk_text_buffer_create_mark(b, NULL, &it, TRUE);
+    gtk_text_view_scroll_to_mark(view, mark, 0.0, TRUE, 0.0, 0.0);
+    gtk_text_buffer_delete_mark(b, mark);
 }
 
 static uint16_t reg_get(const adamcore_z80_regs *r, int i)
@@ -284,6 +376,49 @@ static void refresh_vdp(DbgWin *w)
     set_text(w->vram_view, text);
 }
 
+/* The note and the link state always; the packet log only when it has
+ * changed (or force), since it is rebuilt whole. */
+static void refresh_fujinet(DbgWin *w, gboolean force)
+{
+    static adam_fuji_packet p[FUJI_MAX];
+    static char state[4096];
+    char note[160];
+    GString *t;
+    int n = adamdebug_fujinet_trace(w->dbg, p, FUJI_MAX), i;
+
+    if (!adamsession_fujinet_running(w->session))
+        g_strlcpy(note, "FujiNet is not running (FujiNet \xe2\x96\xb8 FujiNet "
+                        "Console Log).", sizeof(note));
+    else
+        g_snprintf(note, sizeof(note), "FujiNet is on BoIP port %d, %s.",
+                   ADAMSESSION_BOIP_PORT,
+                   adamsession_fujinet_link(w->session) ? "connected"
+                                                        : "not connected");
+    gtk_label_set_text(w->fuji_note, note);
+    adamdebug_fujinet_state(w->dbg, state, (int)sizeof(state));
+    set_text_at(w->fuji_state, state, FALSE);
+
+    if (!force && n == w->fuji_count &&
+        (n == 0 || p[n - 1].serial == w->fuji_last))
+        return;
+    w->fuji_count = n;
+    w->fuji_last = n > 0 ? p[n - 1].serial : 0;
+    log_note_reader(w->fuji_text);
+    t = g_string_new(NULL);
+    for (i = 0; i < n; i++) {
+        int k;
+        g_string_append_printf(t, "%s%s\n     ", i ? "\n" : "", p[i].text);
+        for (k = 0; k < p[i].nbytes && k < (int)sizeof(p[i].data); k++)
+            g_string_append_printf(t, "%02X ", p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof(p[i].data))
+            g_string_append(t, "\xe2\x80\xa6");
+    }
+    if (n == 0)
+        g_string_append(t, "(no AdamNet packets since the trace was cleared)");
+    set_text_at(w->fuji_text, t->str, force || following(w->fuji_text));
+    g_string_free(t, TRUE);
+}
+
 static void refresh_all(DbgWin *w)
 {
     int paused = adamdebug_is_paused(w->dbg);
@@ -293,6 +428,7 @@ static void refresh_all(DbgWin *w)
     refresh_bps(w);
     refresh_trace(w);
     refresh_vdp(w);
+    refresh_fujinet(w, FALSE);
     gtk_button_set_label(w->pause_btn, paused ? "Continue (F5)"
                                               : "Pause (F5)");
 }
@@ -503,6 +639,23 @@ static void on_vram_page(GtkButton *btn, gpointer ud)
     refresh_vdp(w);
 }
 
+static void on_fuji_clear(GtkButton *b, gpointer ud)
+{
+    DbgWin *w = ud;
+    (void)b;
+    adamdebug_fujinet_trace_clear(w->dbg);
+    refresh_fujinet(w, TRUE);
+}
+
+static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num,
+                           gpointer ud)
+{
+    (void)nb;
+    (void)page;
+    if (num == PAGE_FUJINET)
+        refresh_fujinet(ud, FALSE);
+}
+
 static void on_trace_toggle(GObject *sw, GParamSpec *pspec, gpointer ud)
 {
     DbgWin *w = ud;
@@ -542,6 +695,12 @@ static gboolean tick_refresh(gpointer ud)
     if (!adamdebug_is_paused(w->dbg)) {
         refresh_vdp(w);
         refresh_regs(w);
+        /* the packet log twice a second, while it shows */
+        if (++w->fuji_ticks >= 5) {
+            w->fuji_ticks = 0;
+            if (gtk_notebook_get_current_page(w->notebook) == PAGE_FUJINET)
+                refresh_fujinet(w, FALSE);
+        }
     }
     return G_SOURCE_CONTINUE;
 }
@@ -583,6 +742,45 @@ static GtkWidget *labeled(const char *text, GtkWidget *child)
     gtk_box_append(GTK_BOX(box), label);
     gtk_box_append(GTK_BOX(box), child);
     return box;
+}
+
+/* FujiNet page: the packet log on the left (a note and Clear over it), the
+ * BoIP link's state on the right. */
+static GtkWidget *build_fujinet(DbgWin *w)
+{
+    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    GtkWidget *left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *clear = gtk_button_new_with_label("Clear");
+    GtkWidget *start, *end;
+
+    w->fuji_note = GTK_LABEL(gtk_label_new(""));
+    gtk_widget_add_css_class(GTK_WIDGET(w->fuji_note), "dim-label");
+    gtk_label_set_xalign(w->fuji_note, 0);
+    gtk_label_set_ellipsize(w->fuji_note, PANGO_ELLIPSIZE_END);
+    gtk_widget_set_hexpand(GTK_WIDGET(w->fuji_note), TRUE);
+    g_signal_connect(clear, "clicked", G_CALLBACK(on_fuji_clear), w);
+    gtk_box_append(GTK_BOX(row), GTK_WIDGET(w->fuji_note));
+    gtk_box_append(GTK_BOX(row), clear);
+    gtk_box_append(GTK_BOX(left), row);
+    gtk_box_append(GTK_BOX(left), mono_view(&w->fuji_text, FALSE));
+    make_log(w->fuji_text);
+
+    start = labeled("AdamNet packets over BoIP", left);
+    end = labeled("BoIP link", mono_view(&w->fuji_state, FALSE));
+    gtk_widget_set_size_request(start, 600, -1);
+    gtk_widget_set_size_request(end, 300, -1);
+    gtk_paned_set_start_child(GTK_PANED(paned), start);
+    gtk_paned_set_end_child(GTK_PANED(paned), end);
+    gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_shrink_end_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_resize_end_child(GTK_PANED(paned), FALSE);
+    gtk_widget_set_margin_start(paned, 8);
+    gtk_widget_set_margin_end(paned, 8);
+    gtk_widget_set_margin_top(paned, 8);
+    gtk_widget_set_margin_bottom(paned, 8);
+    w->fuji_count = -1;
+    return paned;
 }
 
 void adam_debugger_show(GtkWindow *parent, adamsession *session)
@@ -815,6 +1013,10 @@ void adam_debugger_show(GtkWindow *parent, adamsession *session)
     }
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scroll,
                              gtk_label_new("Trace"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_fujinet(w),
+                             gtk_label_new("FujiNet"));
+    w->notebook = GTK_NOTEBOOK(notebook);
+    g_signal_connect(notebook, "switch-page", G_CALLBACK(on_switch_page), w);
 
     root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     tb = adw_toolbar_view_new();
@@ -833,13 +1035,17 @@ void adam_debugger_show(GtkWindow *parent, adamsession *session)
     w->tick_timer = g_timeout_add(100, tick_refresh, w);
     g_signal_connect(w->win, "destroy", G_CALLBACK(on_destroy), w);
 
-    /* Dev affordance: ADAM_DEBUGGER_TAB=vdp|trace selects the start tab. */
+    /* Dev affordance: ADAM_DEBUGGER_TAB=vdp|trace|fujinet selects the
+     * start tab. */
     {
         const char *tab = g_getenv("ADAM_DEBUGGER_TAB");
         if (tab && strcmp(tab, "vdp") == 0)
-            gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 1);
+            gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), PAGE_VDP);
         else if (tab && strcmp(tab, "trace") == 0)
-            gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 2);
+            gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), PAGE_TRACE);
+        else if (tab && strcmp(tab, "fujinet") == 0)
+            gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook),
+                                          PAGE_FUJINET);
     }
 
     refresh_all(w);

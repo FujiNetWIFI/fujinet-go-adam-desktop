@@ -1,8 +1,8 @@
 /*
  * adamdebug engine: execution control (pause / step into/over/out /
  * run-to), breakpoint management, the instruction-history ring, symbol
- * annotation, and the emulator-thread frame driver the session switches to
- * while the debugger is engaged.
+ * annotation, the FujiNet packet trace, and the emulator-thread frame driver
+ * the session switches to while the debugger is engaged.
  *
  * Execution model: all core mutation happens on the emulator thread.
  * Control calls from the UI thread flip state under the engine mutex and
@@ -15,11 +15,13 @@
  */
 
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../src/session_internal.h"
 #include "adamdebug.h"
+#include "fujitrace.h"
 #include "symbols.h"
 #include "z80dasm.h"
 
@@ -59,6 +61,11 @@ struct adamdebug {
     int ring_filled;
 
     sym_tables syms;
+
+    /* FujiNet packet trace, fed on the emulator thread by adamcore's BoIP
+     * hook. Its own lock, so the wire never waits on a UI holding mtx. */
+    pthread_mutex_t fuji_mtx;
+    adamfuji *fuji;
 };
 
 /* ---- engagement ----------------------------------------------------------- */
@@ -256,7 +263,11 @@ adamdebug *adamsession_debugger(adamsession *s)
             d->session = s;
             pthread_mutex_init(&d->mtx, NULL);
             pthread_cond_init(&d->cv, NULL);
+            pthread_mutex_init(&d->fuji_mtx, NULL);
             d->ring = calloc(TRACE_RING_LEN, sizeof(adamtrace_entry));
+            d->fuji = calloc(1, sizeof(*d->fuji));
+            if (d->fuji)
+                adamfuji_init(d->fuji);
             symtabs_load_text(&d->syms, adamdebug_builtin_os7_sym, "os7");
             symtabs_load_text(&d->syms, adamdebug_builtin_eos_sym, "eos");
             s->debugger = d;
@@ -664,5 +675,63 @@ int adamdebug_vdp_write(adamdebug *d, uint16_t addr, const uint8_t *src, int n)
     vram = (uint8_t *)adamcore_vdp_vram(c);
     for (i = 0; i < n; i++)
         vram[(addr + i) & 0x3FFF] = src[i];
+    return n;
+}
+
+/* ---- FujiNet ----------------------------------------------------------------- */
+
+/* adamcore's BoIP wire trace, on the emulator thread. adamcore's dir 0 is
+ * FujiNet -> ADAM. */
+void adamdebug_boip_trace(void *ud, int dir, const uint8_t *buf, int len)
+{
+    adamdebug *d = ud;
+    if (!d || !d->fuji) return;
+    pthread_mutex_lock(&d->fuji_mtx);
+    adamfuji_feed(d->fuji, dir == 0, buf, len);
+    pthread_mutex_unlock(&d->fuji_mtx);
+}
+
+int adamdebug_fujinet_trace(adamdebug *d, adam_fuji_packet *out, int max)
+{
+    int n = 0;
+    if (!d->fuji) return 0;
+    pthread_mutex_lock(&d->fuji_mtx);
+    n = adamfuji_read(d->fuji, out, max);
+    pthread_mutex_unlock(&d->fuji_mtx);
+    return n;
+}
+
+void adamdebug_fujinet_trace_clear(adamdebug *d)
+{
+    if (!d->fuji) return;
+    pthread_mutex_lock(&d->fuji_mtx);
+    adamfuji_clear(d->fuji);
+    pthread_mutex_unlock(&d->fuji_mtx);
+}
+
+int adamdebug_fujinet_state(adamdebug *d, char *dst, int dstsz)
+{
+    adamsession *s = d->session;
+    const char *link;
+    int n;
+
+    if (dstsz <= 0) return 0;
+    if (!adamsession_fujinet_running(s))
+        link = "no FujiNet runtime";
+    else if (!adamsession_is_running(s))
+        link = "the ADAM is off";
+    else if (adamsession_fujinet_link(s))
+        link = "FujiNet connected";
+    else
+        link = "waiting for FujiNet";
+    n = snprintf(dst, (size_t)dstsz, "BoIP     127.0.0.1:%d\nLink     %s\n\n",
+                 ADAMSESSION_BOIP_PORT, link);
+    if (n < 0) n = 0;
+    if (n >= dstsz) return dstsz - 1;
+    if (d->fuji) {
+        pthread_mutex_lock(&d->fuji_mtx);
+        n += adamfuji_format_state(d->fuji, dst + n, dstsz - n);
+        pthread_mutex_unlock(&d->fuji_mtx);
+    }
     return n;
 }

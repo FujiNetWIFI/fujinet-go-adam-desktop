@@ -1,9 +1,9 @@
 /*
  * Debugger window (Qt6): disassembly with click-to-toggle breakpoints,
- * editable registers, memory view, breakpoints, instruction trace, and the
- * VDP visualizers, over the shared adamdebug engine. The engine's stop
- * callback fires on the emulator thread and is marshaled here through a
- * queued signal.
+ * editable registers, memory view, breakpoints, instruction trace, the VDP
+ * visualizers, and the AdamNet packets to and from FujiNet, over the shared
+ * adamdebug engine. The engine's stop callback fires on the emulator thread
+ * and is marshaled here through a queued signal.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -25,7 +25,9 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShortcut>
+#include <QSplitter>
 #include <QTextBlock>
 #include <QTimer>
 #include <QToolBar>
@@ -37,6 +39,7 @@ constexpr int kMemRows = 16;
 constexpr int kVramRows = 16;
 constexpr int kVramPage = kVramRows * 16;
 constexpr int kPokeMax = 64;
+constexpr int kFujiMax = 512;
 const char *const kRegNames[8] = {"AF", "BC", "DE", "HL",
                                   "IX", "IY", "SP", "PC"};
 
@@ -80,6 +83,31 @@ QPlainTextEdit *monoView()
     return v;
 }
 
+/* Whether a view's reader is at its end (a log then follows new lines). */
+bool atEnd(QPlainTextEdit *v)
+{
+    return v->verticalScrollBar()->value() >=
+           v->verticalScrollBar()->maximum() - 1;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+void setText(QPlainTextEdit *v, const QString &text, bool follow = false)
+{
+    if (v->toPlainText() == text) {
+        if (follow)
+            v->verticalScrollBar()->setValue(
+                v->verticalScrollBar()->maximum());
+        return;
+    }
+    const int top = v->verticalScrollBar()->value();
+    const int left = v->horizontalScrollBar()->value();
+    v->setPlainText(text);
+    v->verticalScrollBar()->setValue(
+        follow ? v->verticalScrollBar()->maximum() : top);
+    v->horizontalScrollBar()->setValue(left);
+}
+
 QPointer<DebuggerWindow> g_singleton;
 
 void stop_trampoline(void *ud, adamdebug_stop_reason reason, uint16_t pc)
@@ -121,6 +149,12 @@ DebuggerWindow::DebuggerWindow(QWidget *parent, adamsession *session)
         if (!adamdebug_is_paused(m_dbg)) {
             refreshVdp();
             refreshRegs();
+            /* the packet log twice a second, while it shows */
+            if (++m_fujiTicks >= 5) {
+                m_fujiTicks = 0;
+                if (m_fujiShown)
+                    refreshFujinet(false);
+            }
         }
     });
     m_tick->start(100);
@@ -379,8 +413,48 @@ void DebuggerWindow::buildUi()
     auto *traceDock = new QDockWidget(QStringLiteral("Trace"), this);
     traceDock->setWidget(m_traceView);
     addDockWidget(Qt::BottomDockWidgetArea, traceDock);
+
+    /* FujiNet: the AdamNet packets on the BoIP link (a note and Clear over
+     * them), beside the link's state. */
+    auto *fujiSplit = new QSplitter(Qt::Horizontal);
+    auto *logBox = new QGroupBox(QStringLiteral("AdamNet packets over BoIP"));
+    auto *logLayout = new QVBoxLayout(logBox);
+    auto *fujiRow = new QHBoxLayout;
+    m_fujiNote = new QLabel;
+    auto *fujiClear = new QPushButton(QStringLiteral("Clear"));
+    connect(fujiClear, &QPushButton::clicked, this, [this] {
+        adamdebug_fujinet_trace_clear(m_dbg);
+        refreshFujinet(true);
+    });
+    fujiRow->addWidget(m_fujiNote, 1);
+    fujiRow->addWidget(fujiClear);
+    logLayout->addLayout(fujiRow);
+    m_fujiText = monoView();
+    logLayout->addWidget(m_fujiText, 1);
+    auto *stateBox = new QGroupBox(QStringLiteral("BoIP link"));
+    auto *stateLayout = new QVBoxLayout(stateBox);
+    m_fujiState = monoView();
+    m_fujiState->setMinimumWidth(300);
+    stateLayout->addWidget(m_fujiState);
+    fujiSplit->addWidget(logBox);
+    fujiSplit->addWidget(stateBox);
+    fujiSplit->setStretchFactor(0, 3);
+    fujiSplit->setStretchFactor(1, 1);
+    fujiSplit->setChildrenCollapsible(false);
+    m_fujiDock = new QDockWidget(QStringLiteral("FujiNet"), this);
+    m_fujiDock->setWidget(fujiSplit);
+    addDockWidget(Qt::BottomDockWidgetArea, m_fujiDock);
+    /* A tabbed dock reports its tab being raised as becoming visible. */
+    connect(m_fujiDock, &QDockWidget::visibilityChanged, this,
+            [this](bool visible) {
+                m_fujiShown = visible;
+                if (visible)
+                    refreshFujinet(false);
+            });
+
     tabifyDockWidget(vdpDock, vramDock);
     tabifyDockWidget(vramDock, traceDock);
+    tabifyDockWidget(traceDock, m_fujiDock);
     vdpDock->raise();
 }
 
@@ -441,6 +515,7 @@ void DebuggerWindow::refreshAll()
     refreshBps();
     refreshTrace();
     refreshVdp();
+    refreshFujinet(false);
     m_pauseBtn->setText(adamdebug_is_paused(m_dbg)
                             ? QStringLiteral("Continue (F5)")
                             : QStringLiteral("Pause (F5)"));
@@ -605,6 +680,51 @@ void DebuggerWindow::refreshVdp()
     adamvdp_format_hex(&snap, m_vramBase, kVramRows, state,
                        int(sizeof(state)));
     m_vramView->setPlainText(QString::fromLatin1(state));
+}
+
+/* The note and the link state always; the packet log only when it has
+ * changed (or force), since it is rebuilt whole. */
+void DebuggerWindow::refreshFujinet(bool force)
+{
+    static adam_fuji_packet p[kFujiMax];
+    static char state[4096];
+    const int n = adamdebug_fujinet_trace(m_dbg, p, kFujiMax);
+
+    if (!adamsession_fujinet_running(m_session))
+        m_fujiNote->setText(QStringLiteral(
+            "FujiNet is not running (FujiNet ▸ Console Log)."));
+    else
+        m_fujiNote->setText(
+            QStringLiteral("FujiNet is on BoIP port %1, %2.")
+                .arg(ADAMSESSION_BOIP_PORT)
+                .arg(adamsession_fujinet_link(m_session)
+                         ? QStringLiteral("connected")
+                         : QStringLiteral("not connected")));
+    adamdebug_fujinet_state(m_dbg, state, int(sizeof(state)));
+    setText(m_fujiState, QString::fromUtf8(state));
+
+    if (!force && n == m_fujiCount &&
+        (n == 0 || p[n - 1].serial == m_fujiLast))
+        return;
+    m_fujiCount = n;
+    m_fujiLast = n > 0 ? p[n - 1].serial : 0;
+    QByteArray t;
+    for (int i = 0; i < n; i++) {
+        char hex[4];
+        if (i)
+            t += '\n';
+        t += p[i].text;
+        t += "\n     ";
+        for (int k = 0; k < p[i].nbytes && k < int(sizeof(p[i].data)); k++) {
+            snprintf(hex, sizeof(hex), "%02X ", p[i].data[k]);
+            t += hex;
+        }
+        if (p[i].nbytes > int(sizeof(p[i].data)))
+            t += "\xe2\x80\xa6";
+    }
+    if (n == 0)
+        t = "(no AdamNet packets since the trace was cleared)";
+    setText(m_fujiText, QString::fromUtf8(t), force || atEnd(m_fujiText));
 }
 
 /* One entry does both jobs: an address alone scrolls the dump there, an

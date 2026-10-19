@@ -73,6 +73,7 @@ struct adamsession {
     /* ---- FujiNet runtime (fujinet_runtime.c) ---- */
     int fujinet_loaded;  /* dlopen'd (kept for process lifetime) */
     int fujinet_running;
+    volatile int fujinet_link; /* BoIP client connected (emulator thread) */
 
     /* ---- debugger ---- */
     adamdebug *debugger;
@@ -117,5 +118,7 @@ void adamdebug_resume_for_stop(adamdebug *d);
 /* Apply persisted breakpoints/hook to a freshly created core (emulator
  * thread, right after adamcore_create). */
 void adamdebug_on_core_created(adamsession *s);
+/* adamcore's BoIP wire trace (adamcore_set_boip_trace); ud is the engine. */
+void adamdebug_boip_trace(void *ud, int dir, const uint8_t *buf, int len);
 
 #endif /* ADAMSESSION_INTERNAL_H */

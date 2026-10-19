@@ -147,6 +147,9 @@ int  adamsession_render_audio(adamsession *s, int16_t *out, int nsamples);
 
 /* ---- FujiNet -------------------------------------------------------------*/
 int         adamsession_fujinet_running(const adamsession *s);
+/* 1 while FujiNet is connected to the core's BoIP listener (updated each
+ * emulated frame). */
+int         adamsession_fujinet_link(const adamsession *s);
 const char *adamsession_fujinet_webui_url(const adamsession *s);
 /* Copies the most recent FujiNet console output (NUL-terminated) into dst;
  * returns the number of bytes written (excluding the NUL). */

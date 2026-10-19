@@ -2,9 +2,10 @@
  * adamdebug -- the toolkit-agnostic debugger engine for FujiNet Go Adam
  * Desktop. Wraps adamcore's debug interface (adamcore_debug.h) with
  * pause/step/run-to execution control, breakpoint management, an
- * instruction-history ring, a Z80 disassembler, EOS/OS7 symbol tables, and
- * VDP visualizer decoders. One engine exists per session
- * (adamsession_debugger()); native GTK/Qt views sit on top.
+ * instruction-history ring, a Z80 disassembler, EOS/OS7 symbol tables, VDP
+ * visualizer decoders, and a trace of the AdamNet packets to and from
+ * FujiNet. One engine exists per session (adamsession_debugger()); native
+ * GTK/Qt views sit on top.
  *
  * Threading: control calls (pause/resume/step/breakpoints) are safe from
  * the UI thread. The stop callback fires on the EMULATOR thread -- marshal
@@ -231,6 +232,31 @@ void adamvdp_render_sprites(const adamvdp_snapshot *s, uint8_t *rgba,
 #define ADAMVDP_PAL_W (ADAMVDP_PAL_CELL * ADAMVDP_PAL_COLS)
 #define ADAMVDP_PAL_H (ADAMVDP_PAL_CELL * ADAMVDP_PAL_ROWS)
 void adamvdp_render_palette(const adamvdp_snapshot *s, uint8_t *rgba);
+
+/* ---- FujiNet: every AdamNet packet on the BoIP link ----------------------
+ * Always on from session start, kept in a 512-entry ring. An exchange (a
+ * request and its answers) that repeats the one before it byte for byte --
+ * the 300 ms READY keepalive, a poll -- is kept once, with a count. */
+typedef struct {
+    uint64_t serial;    /* changes whenever the entry does */
+    int      to_host;   /* 1: FujiNet -> ADAM, 0: ADAM -> FujiNet */
+    int      device;    /* AdamNet address 0-15, -1 if not a packet */
+    int      command;   /* the Fuji/network command it carries or answers,
+                           else -1 */
+    int      length;    /* SEND/DATA payload length, else -1 */
+    int      nbytes;
+    uint8_t  data[64];  /* the packet's first bytes */
+    char     text[96];  /* "ADAM → FujiNet 6F SEND E8 GET ADAPTERCONFIG
+                           (1 B, ck ok)" */
+    uint32_t repeat;    /* times the exchange ran in a row (1 = once) */
+} adam_fuji_packet;
+
+/* The newest max packets, oldest first. Returns the count. */
+int  adamdebug_fujinet_trace(adamdebug *d, adam_fuji_packet *out, int max);
+void adamdebug_fujinet_trace_clear(adamdebug *d);
+/* The BoIP link: its port and state, packet counts, and each address seen
+ * with its last STATUS, as text lines. Returns the length written. */
+int  adamdebug_fujinet_state(adamdebug *d, char *dst, int dstsz);
 
 #ifdef __cplusplus
 }

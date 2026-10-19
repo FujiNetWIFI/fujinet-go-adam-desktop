@@ -156,8 +156,12 @@ static void *emu_thread_main(void *arg)
         return NULL;
     }
     s->core = core;
-    if (s->debugger)
+    if (s->debugger) {
+        /* The FujiNet trace is always on: it is cheap, and it is most
+         * useful about what happened before anyone thought to look. */
+        adamcore_set_boip_trace(core, adamdebug_boip_trace, s->debugger);
         adamdebug_on_core_created(s);
+    }
 
     next_us = read_timer_us();
     while (!s->stop_flag) {
@@ -169,6 +173,7 @@ static void *emu_thread_main(void *arg)
 
         if (changed)
             session_publish_frame(s, adamcore_framebuffer(core, NULL, NULL));
+        s->fujinet_link = adamcore_boip_connected(core);
 
         /* Pacing: one emulated frame per UI vsync tick while ticks arrive,
          * else the 59.922 Hz wall clock. Once-per-second diagnostics with
@@ -210,6 +215,7 @@ static void *emu_thread_main(void *arg)
     }
 
     s->core = NULL;
+    s->fujinet_link = 0;
     adamcore_destroy(core);
     s->running = 0;
     return NULL;
@@ -268,6 +274,12 @@ void adamsession_default_opts(adamsession *s, adamsession_start_opts *opts)
 
 int adamsession_start(adamsession *s, const adamsession_start_opts *opts)
 {
+    /* The debugger engine exists before the core does, so the FujiNet trace
+     * sees the link from its first packet. Made here rather than on the
+     * emulator thread: adamsession_debugger takes lifecycle_mtx, which
+     * adamsession_stop holds while it joins that thread. */
+    adamsession_debugger(s);
+
     pthread_mutex_lock(&s->lifecycle_mtx);
     if (s->running) {
         pthread_mutex_unlock(&s->lifecycle_mtx);
@@ -392,6 +404,11 @@ const char *adamsession_fujinet_webui_url(const adamsession *s)
 int adamsession_fujinet_running(const adamsession *s)
 {
     return s->fujinet_running;
+}
+
+int adamsession_fujinet_link(const adamsession *s)
+{
+    return s->fujinet_link;
 }
 
 int adamsession_fujinet_copy_log(adamsession *s, char *dst, int max)

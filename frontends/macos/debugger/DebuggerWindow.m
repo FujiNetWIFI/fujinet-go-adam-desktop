@@ -1,9 +1,10 @@
 /*
  * Debugger window (AppKit): disassembly with click-to-toggle breakpoints,
- * editable registers, memory view, breakpoints, instruction trace, and the
- * VDP visualizers, over the shared adamdebug engine -- the same layout as
- * the GTK and Qt debuggers. Stop events arrive on the emulator thread and
- * are marshaled here with dispatch_async onto the main queue.
+ * editable registers, memory view, breakpoints, instruction trace, the VDP
+ * visualizers, and the AdamNet packets to and from FujiNet, over the shared
+ * adamdebug engine -- the same layout as the GTK and Qt debuggers. Stop
+ * events arrive on the emulator thread and are marshaled here with
+ * dispatch_async onto the main queue.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -17,6 +18,8 @@
 #define MEM_ROWS 16
 #define VRAM_ROWS 24
 #define POKE_MAX 64
+#define FUJI_MAX 512
+#define TAB_FUJINET 4 /* the last tab */
 
 static DebuggerWindow *g_debugger;
 
@@ -48,11 +51,12 @@ static DebuggerWindow *g_debugger;
 }
 @end
 
-@interface DebuggerWindow () <NSWindowDelegate>
+@interface DebuggerWindow () <NSWindowDelegate, NSTabViewDelegate>
 - (instancetype)initWithSession:(adamsession *)session;
 - (void)onStopped:(adamdebug_stop_reason)reason pc:(uint16_t)pc;
 - (void)refreshDisasm;
 - (void)refreshBps;
+- (void)refreshFujinet:(BOOL)force;
 @end
 
 @implementation DebuggerWindow {
@@ -86,6 +90,14 @@ static DebuggerWindow *g_debugger;
     NSTextField *_vramStatus;
     NSTextView *_vramView;
     uint16_t _vramBase;
+
+    NSTabView *_tabs;
+    NSTextField *_fujiNote;
+    NSTextView *_fujiText;
+    NSTextView *_fujiState;
+    int _fujiCount;      /* entries in the log as last built, -1 = never */
+    uint64_t _fujiLast;  /* serial of its newest entry */
+    int _fujiTicks;
 
     NSTimer *_tick;
 }
@@ -163,6 +175,7 @@ static void stop_trampoline(void *ud, adamdebug_stop_reason reason,
     _dbg = adamsession_debugger(session);
     _followPc = YES;
     _memBase = 0xFC30;
+    _fujiCount = -1;
     [self buildWindow];
     adamdebug_set_stop_callback(_dbg, stop_trampoline,
                                 (__bridge void *)self);
@@ -182,7 +195,23 @@ static void stop_trampoline(void *ud, adamdebug_stop_reason reason,
     if (!adamdebug_is_paused(_dbg)) {
         [self refreshVdp];
         [self refreshRegs];
+        /* the packet log twice a second, while it shows */
+        if (++_fujiTicks >= 5) {
+            _fujiTicks = 0;
+            if ([_tabs indexOfTabViewItem:_tabs.selectedTabViewItem] ==
+                TAB_FUJINET)
+                [self refreshFujinet:NO];
+        }
     }
+}
+
+- (void)tabView:(NSTabView *)tabView
+    didSelectTabViewItem:(NSTabViewItem *)item
+{
+    (void)item;
+    if ([tabView indexOfTabViewItem:tabView.selectedTabViewItem] ==
+        TAB_FUJINET)
+        [self refreshFujinet:NO];
 }
 
 /* ---- construction helpers ------------------------------------------------ */
@@ -201,6 +230,34 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     scroll.documentView = view;
     *scrollOut = scroll;
     return view;
+}
+
+/* Whether a view's reader is at its end (a log then follows new lines). */
+static BOOL atEnd(NSTextView *view)
+{
+    NSScrollView *scroll = view.enclosingScrollView;
+    if (!scroll)
+        return YES;
+    return NSMaxY(scroll.contentView.documentVisibleRect) >=
+           NSHeight(view.frame) - 4;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void setText(NSTextView *view, NSString *text, BOOL follow)
+{
+    if (![view.string isEqualToString:text]) {
+        NSScrollView *scroll = view.enclosingScrollView;
+        const NSPoint at =
+            scroll ? scroll.contentView.bounds.origin : NSZeroPoint;
+        view.string = text;
+        if (scroll && !follow) {
+            [scroll.contentView scrollToPoint:at];
+            [scroll reflectScrolledClipView:scroll.contentView];
+        }
+    }
+    if (follow)
+        [view scrollRangeToVisible:NSMakeRange(view.string.length, 0)];
 }
 
 - (NSButton *)button:(NSString *)title action:(SEL)sel
@@ -417,6 +474,54 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     NSScrollView *traceScroll;
     _traceView = monoView(&traceScroll);
 
+    /* FujiNet tab: the packet log (a note and Clear over it) beside the
+     * BoIP link's state. */
+    _fujiNote = [self label:@""];
+    _fujiNote.textColor = NSColor.secondaryLabelColor;
+    [_fujiNote setContentHuggingPriority:1
+                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSButton *fujiClear = [self button:@"Clear" action:@selector(fujiClear:)];
+    NSStackView *fujiRow =
+        [NSStackView stackViewWithViews:@[ _fujiNote, fujiClear ]];
+    fujiRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    [fujiRow setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+                        forOrientation:NSLayoutConstraintOrientationVertical];
+    NSScrollView *fujiScroll, *fujiStateScroll;
+    _fujiText = monoView(&fujiScroll);
+    _fujiState = monoView(&fujiStateScroll);
+    [fujiScroll setContentHuggingPriority:NSLayoutPriorityDefaultLow - 1
+                           forOrientation:NSLayoutConstraintOrientationVertical];
+    [fujiStateScroll
+        setContentHuggingPriority:NSLayoutPriorityDefaultLow - 1
+                   forOrientation:NSLayoutConstraintOrientationVertical];
+    NSStackView *fujiLeft = [NSStackView stackViewWithViews:@[
+        [self label:@"AdamNet packets over BoIP"], fujiRow, fujiScroll
+    ]];
+    fujiLeft.orientation = NSUserInterfaceLayoutOrientationVertical;
+    fujiLeft.alignment = NSLayoutAttributeLeading;
+    fujiLeft.distribution = NSStackViewDistributionFill;
+    fujiLeft.spacing = 6;
+    [fujiRow.widthAnchor constraintEqualToAnchor:fujiLeft.widthAnchor].active =
+        YES;
+    [fujiScroll.widthAnchor constraintEqualToAnchor:fujiLeft.widthAnchor]
+        .active = YES;
+    [fujiLeft.widthAnchor constraintGreaterThanOrEqualToConstant:520].active =
+        YES;
+    NSStackView *fujiRight = [NSStackView
+        stackViewWithViews:@[ [self label:@"BoIP link"], fujiStateScroll ]];
+    fujiRight.orientation = NSUserInterfaceLayoutOrientationVertical;
+    fujiRight.alignment = NSLayoutAttributeLeading;
+    fujiRight.distribution = NSStackViewDistributionFill;
+    fujiRight.spacing = 6;
+    [fujiStateScroll.widthAnchor constraintEqualToAnchor:fujiRight.widthAnchor]
+        .active = YES;
+    [fujiRight.widthAnchor constraintGreaterThanOrEqualToConstant:300].active =
+        YES;
+    NSSplitView *fujiSplit = [[NSSplitView alloc] init];
+    fujiSplit.vertical = YES;
+    [fujiSplit addArrangedSubview:fujiLeft];
+    [fujiSplit addArrangedSubview:fujiRight];
+
     NSTabView *tabs = [[NSTabView alloc] init];
     NSTabViewItem *cpuItem = [NSTabViewItem tabViewItemWithViewController:nil];
     cpuItem.label = @"CPU";
@@ -436,6 +541,13 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     traceItem.label = @"Trace";
     traceItem.view = traceScroll;
     [tabs addTabViewItem:traceItem];
+    NSTabViewItem *fujiItem =
+        [NSTabViewItem tabViewItemWithViewController:nil];
+    fujiItem.label = @"FujiNet";
+    fujiItem.view = fujiSplit;
+    [tabs addTabViewItem:fujiItem];
+    tabs.delegate = self;
+    _tabs = tabs;
 
     NSStackView *root = [NSStackView stackViewWithViews:@[ toolbar, tabs ]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -589,6 +701,7 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     [self refreshBps];
     [self refreshTrace];
     [self refreshVdp];
+    [self refreshFujinet:NO];
     _pauseBtn.title = adamdebug_is_paused(_dbg) ? @"Continue (F5)"
                                                 : @"Pause (F5)";
 }
@@ -722,6 +835,61 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     adamvdp_format_hex(&snap, _vramBase, VRAM_ROWS, stateText,
                        (int)sizeof(stateText));
     _vramView.string = @(stateText);
+}
+
+/* The note and the link state always; the packet log only when it has
+ * changed (or force), since it is rebuilt whole. */
+- (void)refreshFujinet:(BOOL)force
+{
+    static adam_fuji_packet p[FUJI_MAX];
+    static char state[4096];
+    int n = adamdebug_fujinet_trace(_dbg, p, FUJI_MAX);
+
+    if (!adamsession_fujinet_running(_session))
+        _fujiNote.stringValue =
+            @"FujiNet is not running (FujiNet ▸ Console Log).";
+    else
+        _fujiNote.stringValue = [NSString
+            stringWithFormat:@"FujiNet is on BoIP port %d, %@.",
+                             ADAMSESSION_BOIP_PORT,
+                             adamsession_fujinet_link(_session)
+                                 ? @"connected"
+                                 : @"not connected"];
+    adamdebug_fujinet_state(_dbg, state, (int)sizeof(state));
+    setText(_fujiState, @(state), NO);
+
+    if (!force && n == _fujiCount &&
+        (n == 0 || p[n - 1].serial == _fujiLast))
+        return;
+    _fujiCount = n;
+    _fujiLast = n > 0 ? p[n - 1].serial : 0;
+    const BOOL follow = force || atEnd(_fujiText);
+    NSMutableString *text = [NSMutableString string];
+    for (int i = 0; i < n; i++) {
+        char hex[sizeof(p[i].data) * 3 + 8] = "";
+        int len = 0;
+        for (int k = 0; k < p[i].nbytes && k < (int)sizeof(p[i].data); k++)
+            len += snprintf(hex + len, sizeof(hex) - (size_t)len, "%02X ",
+                            p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof(p[i].data))
+            snprintf(hex + len, sizeof(hex) - (size_t)len, "…");
+        if (i)
+            [text appendString:@"\n"];
+        [text appendString:@(p[i].text)];
+        [text appendString:@"\n     "];
+        [text appendString:@(hex)];
+    }
+    if (n == 0)
+        [text appendString:
+                  @"(no AdamNet packets since the trace was cleared)"];
+    setText(_fujiText, text, follow);
+}
+
+- (void)fujiClear:(id)sender
+{
+    (void)sender;
+    adamdebug_fujinet_trace_clear(_dbg);
+    [self refreshFujinet:YES];
 }
 
 /* One field does both jobs: an address alone scrolls the dump there, an

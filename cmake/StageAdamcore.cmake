@@ -49,9 +49,20 @@ if(ADAMCORE_RESTAGE OR NOT EXISTS "${ADAMCORE_GEN}/src/machine.c"
   file(MAKE_DIRECTORY "${ADAMCORE_GEN}")
   file(COPY "${ADAMCORE_DIR}/include" "${ADAMCORE_DIR}/src"
        DESTINATION "${ADAMCORE_GEN}")
+  # adamcore ships its own translation-unit list so that a source added
+  # upstream cannot silently break a staging consumer's link.
+  if(EXISTS "${ADAMCORE_DIR}/adamcore-sources.cmake")
+    file(COPY_FILE "${ADAMCORE_DIR}/adamcore-sources.cmake"
+                   "${ADAMCORE_GEN}/adamcore-sources.cmake")
+  endif()
   if(NOT EXISTS "${ADAMCORE_GEN}/src/machine.c")
     message(FATAL_ERROR "adamcore staging failed (source: ${ADAMCORE_DIR})")
   endif()
+  # file(COPY) keeps the sources' timestamps, which can be older than the
+  # objects an existing build made from the previous staging; the build
+  # would then link those stale objects. Touch the copies so it recompiles.
+  file(GLOB_RECURSE _adamcore_staged_files "${ADAMCORE_GEN}/*")
+  file(TOUCH_NOCREATE ${_adamcore_staged_files})
   file(WRITE "${ADAMCORE_GEN}/.source-info" "${_adamcore_head}\n")
 endif()
 

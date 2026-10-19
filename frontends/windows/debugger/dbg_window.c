@@ -1,8 +1,9 @@
 /*
  * Debugger window (Win32): disassembly with click-to-toggle breakpoints,
- * editable registers, memory view, breakpoints, instruction trace, and the
- * VDP visualizers, over the shared adamdebug engine -- the same layout as
- * the GTK, Qt and AppKit debuggers, built from plain common controls.
+ * editable registers, memory view, breakpoints, instruction trace, the VDP
+ * visualizers, and the AdamNet packets to and from FujiNet, over the shared
+ * adamdebug engine -- the same layout as the GTK, Qt and AppKit debuggers,
+ * built from plain common controls.
  *
  * Stop events arrive on the emulator thread and are marshaled to the UI
  * thread with PostMessage (the Win32 analog of g_idle_add /
@@ -39,7 +40,7 @@ enum {
     IDC_PAT_BANK, IDC_SPRITE_INFO,
     IDC_VIEW_NT, IDC_VIEW_PAT, IDC_VIEW_SPR, IDC_VIEW_PAL,
     IDC_VDP_STATE, IDC_VRAM_ADDR, IDC_VRAM_VIEW, IDC_VRAM_PREV,
-    IDC_VRAM_NEXT,
+    IDC_VRAM_NEXT, IDC_FUJI_CLEAR, IDC_FUJI_TEXT, IDC_FUJI_STATE,
     IDC_REG0, IDC_REG_LAST = IDC_REG0 + 7,
     IDC_LABEL_FIRST /* statics that only carry text */
 };
@@ -49,6 +50,9 @@ enum {
 #define PAGE_VDP 1
 #define PAGE_VRAM 2
 #define PAGE_TRACE 3
+#define PAGE_FUJINET 4
+
+#define FUJI_MAX 512
 
 #define VRAM_ROWS 24
 #define VRAM_PAGE (VRAM_ROWS * 16)
@@ -74,8 +78,11 @@ typedef struct {
     HWND reg_title;
     HWND state_label, vdp_state;
     HWND vram_label, vram_addr, vram_prev, vram_next, vram_status, vram_view;
+    HWND fuji_title, fuji_note, fuji_clear, fuji_text;
+    HWND fuji_state_title, fuji_state;
 
     HFONT mono;
+    int mono_h; /* line height of the mono font */
     HACCEL accel;
 
     adamsession *session;
@@ -86,6 +93,10 @@ typedef struct {
     uint16_t vram_base;
     int follow_pc;
     int page;
+
+    int fuji_count;     /* entries in the log as last built, -1 = never */
+    uint64_t fuji_last; /* serial of its newest entry */
+    int fuji_ticks;
 
     /* VDP scratch: the engine renders RGBA, GDI wants BGRA. */
     adamvdp_snapshot snap;
@@ -170,6 +181,92 @@ static void set_text_lf(HWND h, const char *text)
     buf[o] = '\0';
     set_text(h, buf);
     free(buf);
+}
+
+/* The engine's UTF-8 text for an EDIT control: CRLF line ends, and the few
+ * symbols it uses spelled in ASCII, since these controls are ANSI. */
+static char *view_text(const char *text)
+{
+    static const struct { const char *utf8, *ascii; } subs[] = {
+        {"\xe2\x86\x92", "->"},  /* arrow */
+        {"\xc3\x97", "x"},          /* times */
+        {"\xe2\x80\xa6", "..."}, /* ellipsis */
+    };
+    size_t n = strlen(text), i, o = 0, k;
+    char *buf = (char *)malloc(n * 2 + 1);
+
+    if (!buf)
+        return NULL;
+    for (i = 0; i < n;) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '\n') {
+            buf[o++] = '\r';
+            buf[o++] = '\n';
+            i++;
+            continue;
+        }
+        if (c < 0x80) {
+            buf[o++] = (char)c;
+            i++;
+            continue;
+        }
+        for (k = 0; k < sizeof(subs) / sizeof(subs[0]); k++) {
+            size_t sl = strlen(subs[k].utf8);
+            if (strncmp(text + i, subs[k].utf8, sl) == 0) {
+                strcpy(buf + o, subs[k].ascii);
+                o += strlen(subs[k].ascii);
+                i += sl;
+                break;
+            }
+        }
+        if (k == sizeof(subs) / sizeof(subs[0])) {
+            buf[o++] = '?';
+            i++;
+            while (i < n && ((unsigned char)text[i] & 0xC0) == 0x80)
+                i++;
+        }
+    }
+    buf[o] = '\0';
+    return buf;
+}
+
+/* The rows an EDIT view shows. */
+static int edit_rows(debugger *d, HWND h)
+{
+    RECT c;
+    GetClientRect(h, &c);
+    return d->mono_h > 0 && c.bottom > d->mono_h ? c.bottom / d->mono_h : 1;
+}
+
+/* A log follows its end while its reader is there. */
+static int edit_at_end(debugger *d, HWND h)
+{
+    const int first = (int)SendMessageA(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    const int count = (int)SendMessageA(h, EM_GETLINECOUNT, 0, 0);
+    return first + edit_rows(d, h) >= count;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void set_text_at(HWND h, const char *text, int follow)
+{
+    const int first = (int)SendMessageA(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    char *a = view_text(text);
+
+    if (!a)
+        return;
+    SendMessageA(h, WM_SETREDRAW, FALSE, 0);
+    SetWindowTextA(h, a);
+    if (follow)
+        SendMessageA(h, EM_LINESCROLL, 0,
+                     SendMessageA(h, EM_GETLINECOUNT, 0, 0));
+    else
+        SendMessageA(h, EM_LINESCROLL, 0,
+                     first - (int)SendMessageA(h, EM_GETFIRSTVISIBLELINE, 0,
+                                               0));
+    SendMessageA(h, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(h, NULL, TRUE);
+    free(a);
 }
 
 static int parse_addr(debugger *d, const char *text, uint16_t *out)
@@ -391,6 +488,55 @@ static void refresh_vdp(debugger *d)
     }
 }
 
+/* The note and the link state always; the packet log only when it has
+ * changed (or force), since it is rebuilt whole. */
+static void refresh_fujinet(debugger *d, int force)
+{
+    static adam_fuji_packet p[FUJI_MAX];
+    static char state[4096];
+    char note[160];
+    char *text;
+    size_t cap = FUJI_MAX * 300 + 128, len = 0;
+    int n = adamdebug_fujinet_trace(d->dbg, p, FUJI_MAX), i, follow;
+
+    if (!adamsession_fujinet_running(d->session))
+        snprintf(note, sizeof(note),
+                 "FujiNet is not running (FujiNet > Console Log).");
+    else
+        snprintf(note, sizeof(note), "FujiNet is on BoIP port %d, %s.",
+                 ADAMSESSION_BOIP_PORT,
+                 adamsession_fujinet_link(d->session) ? "connected"
+                                                      : "not connected");
+    set_text(d->fuji_note, note);
+    adamdebug_fujinet_state(d->dbg, state, (int)sizeof(state));
+    set_text_at(d->fuji_state, state, 0);
+
+    if (!force && n == d->fuji_count &&
+        (n == 0 || p[n - 1].serial == d->fuji_last))
+        return;
+    follow = force || d->fuji_count < 0 || edit_at_end(d, d->fuji_text);
+    d->fuji_count = n;
+    d->fuji_last = n > 0 ? p[n - 1].serial : 0;
+    text = (char *)malloc(cap);
+    if (!text)
+        return;
+    text[0] = '\0';
+    for (i = 0; i < n && len + 300 < cap; i++) {
+        int k;
+        len += (size_t)snprintf(text + len, cap - len, "%s%s\n     ",
+                                i ? "\n" : "", p[i].text);
+        for (k = 0; k < p[i].nbytes && k < (int)sizeof(p[i].data); k++)
+            len += (size_t)snprintf(text + len, cap - len, "%02X ",
+                                    p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof(p[i].data))
+            len += (size_t)snprintf(text + len, cap - len, "...");
+    }
+    if (n == 0)
+        snprintf(text, cap, "(no AdamNet packets since the trace was cleared)");
+    set_text_at(d->fuji_text, text, follow);
+    free(text);
+}
+
 static void refresh_all(debugger *d)
 {
     refresh_disasm(d);
@@ -399,6 +545,7 @@ static void refresh_all(debugger *d)
     refresh_bps(d);
     refresh_trace(d);
     refresh_vdp(d);
+    refresh_fujinet(d, 0);
     set_text(d->pause_btn, adamdebug_is_paused(d->dbg) ? "Continue (F5)"
                                                        : "Pause (F5)");
 }
@@ -673,6 +820,8 @@ static void build_controls(debugger *d)
     SendMessageA(d->tabs, TCM_INSERTITEMA, 2, (LPARAM)&item);
     item.pszText = (char *)"Trace";
     SendMessageA(d->tabs, TCM_INSERTITEMA, 3, (LPARAM)&item);
+    item.pszText = (char *)"FujiNet";
+    SendMessageA(d->tabs, TCM_INSERTITEMA, 4, (LPARAM)&item);
 
     /* Toolbar */
     d->pause_btn = child(d, "BUTTON", "Pause (F5)",
@@ -736,6 +885,17 @@ static void build_controls(debugger *d)
 
     /* Trace page */
     d->trace_view = mono_view(d, IDC_TRACE_VIEW);
+
+    /* FujiNet page: the packet log (a note and Clear over it) beside the
+     * BoIP link's state. */
+    d->fuji_title = label(d, "AdamNet packets over BoIP");
+    d->fuji_note = label(d, "");
+    d->fuji_clear = child(d, "BUTTON", "Clear", BS_PUSHBUTTON, IDC_FUJI_CLEAR);
+    d->fuji_text = mono_view(d, IDC_FUJI_TEXT);
+    SendMessageA(d->fuji_text, EM_SETLIMITTEXT, 0, 0);
+    d->fuji_state_title = label(d, "BoIP link");
+    d->fuji_state = mono_view(d, IDC_FUJI_STATE);
+    d->fuji_count = -1;
 }
 
 /* Show only the controls belonging to the selected tab. */
@@ -749,6 +909,8 @@ static void show_page(debugger *d, int page)
     HWND vram[] = {d->state_label, d->vdp_state, d->vram_label,
                    d->vram_addr, d->vram_prev, d->vram_next,
                    d->vram_status, d->vram_view};
+    HWND fuji[] = {d->fuji_title, d->fuji_note, d->fuji_clear, d->fuji_text,
+                   d->fuji_state_title, d->fuji_state};
     size_t i;
 
     d->page = page;
@@ -763,6 +925,8 @@ static void show_page(debugger *d, int page)
     for (i = 0; i < sizeof(vram) / sizeof(vram[0]); i++)
         ShowWindow(vram[i], page == PAGE_VRAM ? SW_SHOW : SW_HIDE);
     ShowWindow(d->trace_view, page == PAGE_TRACE ? SW_SHOW : SW_HIDE);
+    for (i = 0; i < sizeof(fuji) / sizeof(fuji[0]); i++)
+        ShowWindow(fuji[i], page == PAGE_FUJINET ? SW_SHOW : SW_HIDE);
 }
 
 static void layout(debugger *d)
@@ -872,6 +1036,20 @@ static void layout(debugger *d)
     }
 
     MoveWindow(d->trace_view, px, py, pw, ph, TRUE);
+
+    /* FujiNet: the packets left (a note and Clear over them), the link's
+     * state right. */
+    {
+        int rw = pw / 3 > 320 ? 320 : pw / 3 > 220 ? pw / 3 : 220;
+        int lw = pw - rw - 12;
+
+        MoveWindow(d->fuji_title, px, py, lw, 18, TRUE);
+        MoveWindow(d->fuji_clear, px + lw - 80, py + 20, 80, 24, TRUE);
+        MoveWindow(d->fuji_note, px, py + 24, lw - 90, 18, TRUE);
+        MoveWindow(d->fuji_text, px, py + 50, lw, ph - 50, TRUE);
+        MoveWindow(d->fuji_state_title, px + lw + 12, py, rw, 18, TRUE);
+        MoveWindow(d->fuji_state, px + lw + 12, py + 20, rw, ph - 20, TRUE);
+    }
 }
 
 /* ---- window proc ---------------------------------------------------------- */
@@ -892,6 +1070,12 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             refresh_regs(d);
             if (d->page == PAGE_VDP || d->page == PAGE_VRAM)
                 refresh_vdp(d);
+            /* the packet log twice a second, while it shows */
+            if (++d->fuji_ticks >= 5) {
+                d->fuji_ticks = 0;
+                if (d->page == PAGE_FUJINET)
+                    refresh_fujinet(d, 0);
+            }
         }
         return 0;
     case WM_DBG_STOPPED:
@@ -904,6 +1088,8 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (((LPNMHDR)lp)->code == (UINT)TCN_SELCHANGE) {
             show_page(d, (int)SendMessageA(d->tabs, TCM_GETCURSEL, 0, 0));
             layout(d);
+            if (d->page == PAGE_FUJINET)
+                refresh_fujinet(d, 0);
             return 0;
         }
         break;
@@ -934,6 +1120,10 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_VRAM_NEXT:
             d->vram_base = (uint16_t)((d->vram_base + VRAM_PAGE) & 0x3FFF);
             refresh_vdp(d);
+            return 0;
+        case IDC_FUJI_CLEAR:
+            adamdebug_fujinet_trace_clear(d->dbg);
+            refresh_fujinet(d, 1);
             return 0;
         default:
             break;
@@ -1014,6 +1204,16 @@ void adam_debugger_show(HWND parent, adamsession *session)
                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                           CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
                           FIXED_PITCH | FF_MODERN, "Consolas");
+    {
+        HDC dc = GetDC(d->hwnd);
+        HGDIOBJ prev = SelectObject(dc, d->mono);
+        TEXTMETRICA tm;
+        d->mono_h = 15;
+        if (GetTextMetricsA(dc, &tm))
+            d->mono_h = tm.tmHeight;
+        SelectObject(dc, prev);
+        ReleaseDC(d->hwnd, dc);
+    }
 
     build_controls(d);
 
@@ -1031,8 +1231,8 @@ void adam_debugger_show(HWND parent, adamsession *session)
     adamdebug_set_stop_callback(d->dbg, stop_trampoline, d);
     SetTimer(d->hwnd, TIMER_REFRESH, 100, NULL);
 
-    /* Dev affordance: ADAM_DEBUGGER_TAB=vdp|vram|trace picks the start
-     * tab. */
+    /* Dev affordance: ADAM_DEBUGGER_TAB=vdp|vram|trace|fujinet picks the
+     * start tab. */
     tab = getenv("ADAM_DEBUGGER_TAB");
     d->page = PAGE_CPU;
     if (tab && !strcmp(tab, "vdp"))
@@ -1041,6 +1241,8 @@ void adam_debugger_show(HWND parent, adamsession *session)
         d->page = PAGE_VRAM;
     else if (tab && !strcmp(tab, "trace"))
         d->page = PAGE_TRACE;
+    else if (tab && !strcmp(tab, "fujinet"))
+        d->page = PAGE_FUJINET;
     SendMessageA(d->tabs, TCM_SETCURSEL, (WPARAM)d->page, 0);
     show_page(d, d->page);
 

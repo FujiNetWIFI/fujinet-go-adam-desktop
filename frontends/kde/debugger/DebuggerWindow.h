@@ -11,6 +11,7 @@
 #include "adamsession.h"
 
 class QComboBox;
+class QDockWidget;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -37,6 +38,7 @@ private:
     void refreshBps();
     void refreshTrace();
     void refreshVdp();
+    void refreshFujinet(bool force);
     void onStopped(int reason, quint16 pc);
     void pauseContinue();
     bool parseAddr(const QString &text, quint16 *out);
@@ -72,6 +74,15 @@ private:
     QLabel *m_vramStatus;
     QPlainTextEdit *m_vramView;
     quint16 m_vramBase = 0;
+
+    QDockWidget *m_fujiDock;
+    QLabel *m_fujiNote;
+    QPlainTextEdit *m_fujiText;
+    QPlainTextEdit *m_fujiState;
+    bool m_fujiShown = false; /* its dock is the raised tab */
+    int m_fujiCount = -1;     /* entries in the log as last built */
+    quint64 m_fujiLast = 0;   /* serial of its newest entry */
+    int m_fujiTicks = 0;
 
     QTimer *m_tick;
 };
