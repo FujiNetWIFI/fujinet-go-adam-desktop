@@ -19,6 +19,7 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QOpenGLContext>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -718,6 +719,10 @@ private slots:
      * chord through to the View menu's action) and the View menu entry. */
     void f12FromTheMainWindow()
     {
+        /* the display is a QOpenGLWidget: CI's offscreen Qt has no GL */
+        QOpenGLContext gl;
+        if (!gl.create())
+            QSKIP("no OpenGL context on this platform");
         MainWindow main(m_s);
         main.show();
         QVERIFY(QTest::qWaitForWindowExposed(&main));
