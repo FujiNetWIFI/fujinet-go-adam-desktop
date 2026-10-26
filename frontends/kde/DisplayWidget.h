@@ -31,6 +31,8 @@ protected:
     void paintGL() override;
     void keyPressEvent(QKeyEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
+    void focusOutEvent(QFocusEvent *event) override;
+    bool focusNextPrevChild(bool next) override;
     bool event(QEvent *event) override;
     void showEvent(QShowEvent *event) override;
 

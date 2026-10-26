@@ -43,6 +43,26 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.10.0" date="2026-10-26">
+      <description>
+        <p>
+          A controllers window (F9): both ColecoVision controllers to click,
+          and a Map mode that rebinds any control to a key or a gamepad
+          button, with Clear and Defaults. Controller 1's stick is on the
+          numeric keypad by default.
+        </p>
+        <p>
+          The debugger is rebuilt like the other FujiNet Go apps: a console,
+          conditional and ranged breakpoints, memory and port watchpoints,
+          run to cursor, a memory map, and the current line highlighted in
+          the accent colour. Toggled buttons use the accent colour too.
+        </p>
+        <p>
+          Windows draws with Direct3D 11, and its About box shows the app
+          icon.
+        </p>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-10-19">
       <description>
         <p>

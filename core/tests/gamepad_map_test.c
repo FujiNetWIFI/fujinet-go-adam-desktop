@@ -123,12 +123,42 @@ int main(void)
      * (right 0x0200, down 0x0400, fireL 0x4000 all cleared from 0x7F7F). */
     SDL_SetJoystickVirtualAxis(vj, SDL_GAMEPAD_AXIS_LEFTX, 20000);
     SDL_SetJoystickVirtualAxis(vj, SDL_GAMEPAD_AXIS_LEFTY, 20000);
-    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_WEST, true);
-    wait_for(s, 0x397F, "stick right+down + west=fireL");
+    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    wait_for(s, 0x397F, "stick right+down + south=fireL");
     SDL_SetJoystickVirtualAxis(vj, SDL_GAMEPAD_AXIS_LEFTX, 0);
     SDL_SetJoystickVirtualAxis(vj, SDL_GAMEPAD_AXIS_LEFTY, 0);
-    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_WEST, false);
+    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_SOUTH, false);
     wait_for(s, 0x7F7F, "release all");
+
+    /* West is unbound by default. */
+    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_WEST, true);
+    usleep(150 * 1000);
+    wait_for(s, 0x7F7F, "west unbound");
+    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_WEST, false);
+
+    /* Rebind West to keypad 5: the word carries the key. */
+    adamsession_binding_set_button(s, ADAM_TARGET_PORT(0, 5), ADAM_PAD_BTN_WEST,
+                                   NULL, 0);
+    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_WEST, true);
+    wait_for(s, 0x7F75, "west=keypad 5");
+    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_WEST, false);
+    wait_for(s, 0x7F7F, "release keypad");
+    adamsession_bindings_reset(s);
+
+    /* Map mode: the next press is reported and does not fire its target. */
+    adamsession_gamepad_capture_begin(s);
+    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_NORTH, true);
+    {
+        int got = -1, tries;
+        for (tries = 0; tries < 100 && !adamsession_gamepad_capture_poll(s, &got); tries++)
+            usleep(20 * 1000);
+        if (got != ADAM_PAD_BTN_NORTH) {
+            fprintf(stderr, "FAIL capture: got %d want north\n", got);
+            failures++;
+        }
+    }
+    SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_NORTH, false);
+    wait_for(s, 0x7F7F, "capture does not drive");
 
     /* Hot-unplug: the count returns to what it was before the attach. */
     SDL_CloseJoystick(vj);

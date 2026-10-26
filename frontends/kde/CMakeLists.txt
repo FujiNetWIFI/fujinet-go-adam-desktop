@@ -18,6 +18,8 @@ add_executable(fujinet-go-adam-kde
   DisplayWidget.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
+  KeyForward.cpp
+  keypad/KeypadWindow.cpp
   debugger/DebuggerWindow.cpp
 )
 target_link_libraries(fujinet-go-adam-kde PRIVATE
@@ -34,6 +36,35 @@ if(WITH_WEBVIEW)
   else()
     message(STATUS "KDE frontend: Qt6 WebEngine not found -- FujiNet config opens in the browser")
   endif()
+endif()
+
+# The key translation and the Controllers window, on the offscreen platform.
+find_package(Qt6 COMPONENTS Test QUIET)
+if(Qt6Test_FOUND)
+  add_executable(keypad_test keypad_test.cpp KeyForward.cpp
+                 keypad/KeypadWindow.cpp)
+  target_link_libraries(keypad_test PRIVATE adamsession Qt6::Widgets Qt6::Test)
+  target_include_directories(keypad_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_compile_options(keypad_test PRIVATE -Wall -Wextra)
+  add_test(NAME keypad_kde COMMAND keypad_test)
+  set_tests_properties(keypad_kde PROPERTIES
+                       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+# The Debugger window (and F12 from the main window), on the offscreen
+# platform, against a running ColecoVision session with a hand-assembled
+# cartridge.
+if(Qt6Test_FOUND)
+  add_executable(debugger_test debugger_test.cpp FujiNetWindows.cpp
+                 debugger/DebuggerWindow.cpp MainWindow.cpp DisplayWidget.cpp
+                 SettingsDialog.cpp KeyForward.cpp keypad/KeypadWindow.cpp)
+  target_link_libraries(debugger_test PRIVATE adamsession Qt6::Widgets
+                        Qt6::OpenGLWidgets Qt6::Test)
+  target_include_directories(debugger_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_compile_options(debugger_test PRIVATE -Wall -Wextra)
+  add_test(NAME debugger_kde COMMAND debugger_test)
+  set_tests_properties(debugger_kde PROPERTIES
+                       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 set(KDE_APP_ID online.fujinet.go.adam.kde)

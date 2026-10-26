@@ -1,7 +1,8 @@
 /*
- * MainWindow: menu bar over the emulator display; F10 opens the menu, F11
- * toggles fullscreen, F12 opens the debugger. No on-screen input panels
- * appear unless the user explicitly asks.
+ * MainWindow: menu bar over the emulator display; F9 toggles the Controllers
+ * window, F10 opens the menu, F11 toggles fullscreen, F12 shows or hides
+ * the debugger. No on-screen input panels appear unless the user explicitly
+ * asks.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -15,6 +16,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QStatusBar>
+#include <QTimer>
 
 #include <cstdlib>
 
@@ -22,6 +24,7 @@
 #include "FujiNetWindows.h"
 #include "SettingsDialog.h"
 #include "debugger/DebuggerWindow.h"
+#include "keypad/KeypadWindow.h"
 
 MainWindow::MainWindow(adamsession *session, QWidget *parent)
     : QMainWindow(parent), m_session(session)
@@ -38,6 +41,10 @@ MainWindow::MainWindow(adamsession *session, QWidget *parent)
     /* Developer affordance: open the debugger alongside the main window. */
     if (getenv("ADAM_OPEN_DEBUGGER"))
         DebuggerWindow::showFor(this, m_session);
+    /* ... and the Controllers window, once this window is up to be its
+     * parent. */
+    if (getenv("ADAM_OPEN_KEYPAD"))
+        QTimer::singleShot(0, this, &MainWindow::toggleKeypad);
 }
 
 void MainWindow::applyDisplaySettings()
@@ -92,9 +99,11 @@ void MainWindow::buildMenus()
     QMenu *view = menuBar()->addMenu(QStringLiteral("&View"));
     view->addAction(QStringLiteral("Fullscreen"), QKeySequence(Qt::Key_F11),
                     this, &MainWindow::toggleFullscreen);
+    view->addAction(QStringLiteral("Controllers"), QKeySequence(Qt::Key_F9),
+                    this, &MainWindow::toggleKeypad);
     view->addAction(QStringLiteral("Debugger"), QKeySequence(Qt::Key_F12),
                     this,
-                    [this] { DebuggerWindow::showFor(this, m_session); });
+                    [this] { DebuggerWindow::toggleFor(this, m_session); });
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));
     help->addAction(QStringLiteral("About FujiNet Go Adam"), this,
@@ -123,6 +132,19 @@ void MainWindow::toggleFullscreen()
     } else {
         menuBar()->hide();
         showFullScreen();
+    }
+}
+
+void MainWindow::toggleKeypad()
+{
+    if (!m_keypad)
+        m_keypad = new KeypadWindow(m_session, this);
+    if (m_keypad->isVisible()) {
+        m_keypad->hide();
+    } else {
+        m_keypad->show();
+        m_keypad->raise();
+        m_keypad->activateWindow();
     }
 }
 

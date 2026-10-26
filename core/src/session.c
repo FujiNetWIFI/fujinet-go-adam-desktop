@@ -214,7 +214,7 @@ static void *emu_thread_main(void *arg)
         }
     }
 
-    s->core = NULL;
+    adamdebug_clear_core(s); /* s->core = NULL, under the debugger's lock */
     s->fujinet_link = 0;
     adamcore_destroy(core);
     s->running = 0;
@@ -241,6 +241,7 @@ adamsession *adamsession_new(const adamsession_paths *paths)
     adam_cond_init_monotonic(&s->vs_cv);
 
     settings_init(s);
+    input_init(s);
     return s;
 }
 
@@ -248,6 +249,8 @@ void adamsession_free(adamsession *s)
 {
     if (!s) return;
     adamsession_stop(s);
+    adamdebug_destroy(s->debugger);
+    s->debugger = NULL;
     adamsession_settings_flush(s);
     settings_free_all(s);
     pthread_mutex_destroy(&s->lifecycle_mtx);
@@ -343,6 +346,7 @@ void adamsession_stop(adamsession *s)
     s->emu_thread_started = 0;
     audio_stop(s);
     gamepad_stop(s);
+    input_release_everything(s);
     fujinet_stop(s);
     s->running = 0;
     pthread_mutex_unlock(&s->lifecycle_mtx);

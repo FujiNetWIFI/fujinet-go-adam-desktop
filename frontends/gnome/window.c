@@ -1,8 +1,8 @@
 /*
  * AdamWindow: main window of the GNOME frontend. Header bar + menu over the
- * emulator display; keyboard capture routes everything except F10 (menu),
- * F11 (fullscreen) and F12 (debugger) to the ADAM. No on-screen input
- * panels are shown unless the user asks for them.
+ * emulator display; keyboard capture routes everything except F9 (keypad
+ * window), F10 (menu), F11 (fullscreen) and F12 (debugger) to the ADAM. No
+ * on-screen input panels are shown unless the user asks for them.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -14,6 +14,7 @@
 
 #include "debugger/dbg_window.h"
 #include "display.h"
+#include "keypad/keypad_window.h"
 #include "prefs.h"
 #include "webview.h"
 
@@ -27,6 +28,52 @@ struct _AdamWindow {
 };
 
 G_DEFINE_FINAL_TYPE(AdamWindow, adam_window, ADW_TYPE_APPLICATION_WINDOW)
+
+/* ---- the display CSS ----------------------------------------------------
+ * One display-wide provider, installed at startup so every window gets it:
+ * checked toggles and highlighted buttons in the icon's colour
+ * (ADAMSESSION_ACCENT_RGB) with BLACK text (the accent is light), in light
+ * and dark. */
+
+void adam_css_install(void)
+{
+    static gboolean done;
+    GtkCssProvider *provider;
+    g_autofree char *css = NULL;
+    GdkDisplay *display = gdk_display_get_default();
+    unsigned rgb = ADAMSESSION_ACCENT_RGB, hover = 0;
+    int shift;
+
+    if (done || !display)
+        return;
+    done = TRUE;
+    /* a little lighter under the pointer */
+    for (shift = 16; shift >= 0; shift -= 8) {
+        unsigned c = (rgb >> shift) & 0xFF;
+        hover |= (c + (255 - c) * 18 / 100) << shift;
+    }
+    css = g_strdup_printf(
+        "button.adam-toggle:checked, togglebutton.adam-toggle:checked,\n"
+        "button.adam-accent {\n"
+        "  background-image: none; background-color: #%06X; color: #000000;\n"
+        "}\n"
+        "button.adam-toggle:checked:hover, button.adam-accent:hover {\n"
+        "  background-image: none; background-color: #%06X; color: #000000;\n"
+        "}\n"
+        ".adam-accent-text { color: #%06X; font-weight: bold; }\n"
+        "button.adam-key { padding-left: 4px; padding-right: 4px; }\n",
+        rgb, hover, rgb);
+    provider = gtk_css_provider_new();
+#if GTK_CHECK_VERSION(4, 12, 0)
+    gtk_css_provider_load_from_string(provider, css);
+#else
+    gtk_css_provider_load_from_data(provider, css, -1);
+#endif
+    gtk_style_context_add_provider_for_display(
+        display, GTK_STYLE_PROVIDER(provider),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(provider);
+}
 
 /* ---- helpers ------------------------------------------------------------ */
 
@@ -56,16 +103,62 @@ static void apply_display_settings(AdamWindow *self)
 
 /* ---- keyboard capture --------------------------------------------------- */
 
+/* The session keysym of a key event. The physical key (evdev code, GDK's
+ * keycode - 8) rather than the layout's keyval, so the keypad's 8/4/6/2
+ * still bind with NumLock off or Shift held and a binding means the same key
+ * in every frontend; a key the table lacks falls back to the keyval. */
+static guint32 session_keysym(guint keyval, guint keycode)
+{
+    guint32 keysym = keycode >= 8 ? adamsession_keysym_from_evdev(keycode - 8) : 0;
+    return keysym ? keysym : keyval;
+}
+
+gboolean adam_window_input_key(adamsession *session, guint keyval,
+                               guint keycode, GdkModifierType state,
+                               gboolean down)
+{
+    guint32 keysym = session_keysym(keyval, keycode);
+
+    if (down && adam_keypad_window_map_key(keysym))
+        return TRUE;
+    /* A release always reaches the session: it clears exactly what the
+     * press asserted, even if Map mode was armed in between. */
+    return adamsession_input_key(session, keysym, down,
+                                 (state & GDK_CONTROL_MASK) != 0) != 0;
+}
+
+gboolean adam_window_type_key(adamsession *session, guint keyval,
+                              GdkModifierType state)
+{
+    int code;
+
+    /* Leave Alt combos to mnemonics/WM; the ADAM keyboard has no Alt. */
+    if (state & GDK_ALT_MASK)
+        return FALSE;
+    code = adam_key_from_event(keyval, gdk_keyval_to_unicode(keyval),
+                               (state & GDK_CONTROL_MASK) != 0);
+    if (code < 0)
+        return FALSE;
+    adamsession_key(session, (uint8_t)code);
+    return TRUE;
+}
+
 static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
                                guint keycode, GdkModifierType state,
                                gpointer user_data)
 {
     AdamWindow *self = ADAM_WINDOW(user_data);
-    int code;
     (void)controller;
-    (void)keycode;
+
+    /* Map capture and the controller bindings first (Ctrl+digit is the
+     * built-in chord for the port 1 keypad). */
+    if (adam_window_input_key(self->session, keyval, keycode, state, TRUE))
+        return TRUE;
 
     switch (keyval) {
+    case GDK_KEY_F9:
+        gtk_widget_activate_action(GTK_WIDGET(self), "win.keypad", NULL);
+        return TRUE;
     case GDK_KEY_F10: /* open the primary menu */
         gtk_menu_button_popup(self->menu_button);
         return TRUE;
@@ -82,27 +175,7 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
         break;
     }
 
-    /* Leave Alt combos to mnemonics/WM; the ADAM keyboard has no Alt. */
-    if (state & GDK_ALT_MASK)
-        return FALSE;
-
-    /* Ctrl+digit presses the game-controller keypad (game select on
-     * cartridges and tape games); released in on_key_released. */
-    if ((state & GDK_CONTROL_MASK) && keyval >= GDK_KEY_0 &&
-        keyval <= GDK_KEY_9) {
-        adamsession_joystick_raw(
-            self->session, 0,
-            adam_controller_encode(0, 0, 0, 0, 0, 0,
-                                   (int)(keyval - GDK_KEY_0)));
-        return TRUE;
-    }
-
-    code = adam_key_from_event(keyval, gdk_keyval_to_unicode(keyval),
-                               (state & GDK_CONTROL_MASK) != 0);
-    if (code < 0)
-        return FALSE;
-    adamsession_key(self->session, (uint8_t)code);
-    return TRUE;
+    return adam_window_type_key(self->session, keyval, state);
 }
 
 static void on_key_released(GtkEventControllerKey *controller, guint keyval,
@@ -111,33 +184,42 @@ static void on_key_released(GtkEventControllerKey *controller, guint keyval,
 {
     AdamWindow *self = ADAM_WINDOW(user_data);
     (void)controller;
-    (void)keycode;
-    (void)state;
-    if (keyval >= GDK_KEY_0 && keyval <= GDK_KEY_9)
-        adamsession_joystick_raw(self->session, 0,
-                                 adam_controller_encode(0, 0, 0, 0, 0, 0, -1));
+    adam_window_input_key(self->session, keyval, keycode, state, FALSE);
+}
+
+/* Keys held into a focus change must not stay down. */
+static void on_active_changed(GObject *object, GParamSpec *pspec,
+                              gpointer user_data)
+{
+    AdamWindow *self = ADAM_WINDOW(user_data);
+    (void)pspec;
+    if (!gtk_window_is_active(GTK_WINDOW(object)))
+        adamsession_release_all(self->session);
 }
 
 /* ---- actions ------------------------------------------------------------ */
 
+void adam_window_run_sysaction(AdamWindow *self, int sysact)
+{
+    adamsession_sysaction(self->session, sysact);
+    adam_window_toast(self, sysact == ADAM_SYSACT_RESET_GAME ? "Game reset"
+                                                             : "Computer reset");
+}
+
 static void action_reset_adam(GSimpleAction *action, GVariant *param,
                               gpointer user_data)
 {
-    AdamWindow *self = ADAM_WINDOW(user_data);
     (void)action;
     (void)param;
-    adamsession_reset(self->session, 0);
-    adam_window_toast(self, "Computer reset");
+    adam_window_run_sysaction(ADAM_WINDOW(user_data), ADAM_SYSACT_RESET_COMPUTER);
 }
 
 static void action_reset_cv(GSimpleAction *action, GVariant *param,
                             gpointer user_data)
 {
-    AdamWindow *self = ADAM_WINDOW(user_data);
     (void)action;
     (void)param;
-    adamsession_reset(self->session, 1);
-    adam_window_toast(self, "Game reset");
+    adam_window_run_sysaction(ADAM_WINDOW(user_data), ADAM_SYSACT_RESET_GAME);
 }
 
 static void import_done(GObject *source, GAsyncResult *result,
@@ -270,13 +352,22 @@ static void action_preferences(GSimpleAction *action, GVariant *param,
     adam_prefs_show(self, self->session, apply_display_settings);
 }
 
+static void action_keypad(GSimpleAction *action, GVariant *param,
+                          gpointer user_data)
+{
+    AdamWindow *self = ADAM_WINDOW(user_data);
+    (void)action;
+    (void)param;
+    adam_keypad_window_toggle(GTK_WINDOW(self), self->session);
+}
+
 static void action_debugger(GSimpleAction *action, GVariant *param,
                             gpointer user_data)
 {
     AdamWindow *self = ADAM_WINDOW(user_data);
     (void)action;
     (void)param;
-    adam_debugger_show(GTK_WINDOW(self), self->session);
+    adam_debugger_toggle(GTK_WINDOW(self), self->session);
 }
 
 static void action_about(GSimpleAction *action, GVariant *param,
@@ -321,6 +412,7 @@ static GMenu *build_menu(void)
     g_menu_append(fujinet, "FujiNet Console Log…", "win.fujinet-log");
     g_menu_append_section(menu, "FujiNet", G_MENU_MODEL(fujinet));
 
+    g_menu_append(view, "Controllers (F9)", "win.keypad");
     g_menu_append(view, "Debugger (F12)", "win.debugger");
     g_menu_append_section(menu, "View", G_MENU_MODEL(view));
 
@@ -345,6 +437,7 @@ static const GActionEntry win_actions[] = {
     {.name = "fujinet-config", .activate = action_fujinet_config},
     {.name = "fujinet-log", .activate = action_fujinet_log},
     {.name = "preferences", .activate = action_preferences},
+    {.name = "keypad", .activate = action_keypad},
     {.name = "debugger", .activate = action_debugger},
     {.name = "about", .activate = action_about},
 };
@@ -401,12 +494,17 @@ GtkWidget *adam_window_new(AdwApplication *app, adamsession *session)
     g_signal_connect(keys, "key-released", G_CALLBACK(on_key_released),
                      self);
     gtk_widget_add_controller(GTK_WIDGET(self), keys);
+    g_signal_connect(self, "notify::is-active", G_CALLBACK(on_active_changed),
+                     self);
 
     apply_display_settings(self);
     gtk_widget_grab_focus(GTK_WIDGET(self->display));
 
-    /* Developer affordance: open the debugger alongside the main window. */
+    /* Developer affordances: open the debugger / the controllers window
+     * alongside the main window (neither is shown unless asked for). */
     if (getenv("ADAM_OPEN_DEBUGGER"))
         adam_debugger_show(GTK_WINDOW(self), session);
+    if (getenv("ADAM_OPEN_KEYPAD"))
+        adam_keypad_window_toggle(GTK_WINDOW(self), session);
     return GTK_WIDGET(self);
 }

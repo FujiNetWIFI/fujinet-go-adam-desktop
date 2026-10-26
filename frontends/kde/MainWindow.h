@@ -10,6 +10,7 @@
 #include "adamsession.h"
 
 class DisplayWidget;
+class KeypadWindow;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -29,6 +30,7 @@ private:
     void loadCartridge();
     void ejectCartridge();
     void toggleFullscreen();
+    void toggleKeypad();
     void showPreferences();
     void showFujiNetConfig();
     void showFujiNetLog();
@@ -36,4 +38,5 @@ private:
 
     adamsession *m_session;
     DisplayWidget *m_display;
+    KeypadWindow *m_keypad = nullptr;
 };

@@ -25,4 +25,24 @@ const char *adam_icon_name(void);
 void adam_window_restart_session(AdamWindow *self);
 void adam_window_toast(AdamWindow *self, const char *message);
 
+/* Display-wide CSS, installed once at startup before any window: toggled-on
+ * push buttons (class "adam-toggle") and highlighted ones ("adam-accent")
+ * in the accent colour with black text, plus "adam-accent-text" (bold accent
+ * coloured text). */
+void adam_css_install(void);
+
+/* A system action (ADAM_SYSACT_*) from the keypad window, with the same
+ * feedback as the Machine menu. */
+void adam_window_run_sysaction(AdamWindow *self, int sysact);
+
+/* The key path shared by the main and keypad windows. Step 1: Map-mode
+ * capture, then the controller bindings (adamsession_input_key); TRUE = the
+ * key is consumed. Step 3 (after a window's own shortcuts): type it on the
+ * ADAM keyboard; TRUE = typed. */
+gboolean adam_window_input_key(adamsession *session, guint keyval,
+                               guint keycode, GdkModifierType state,
+                               gboolean down);
+gboolean adam_window_type_key(adamsession *session, guint keyval,
+                              GdkModifierType state);
+
 G_END_DECLS

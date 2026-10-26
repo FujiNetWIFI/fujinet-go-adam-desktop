@@ -11,6 +11,7 @@
 
 #include <cstdio>
 
+#include "FujiNetWindows.h"
 #include "MainWindow.h"
 #include "adamsession.h"
 
@@ -32,6 +33,21 @@ int main(int argc, char *argv[])
         QIcon(QStringLiteral(ADAM_ICON_FILE))));
 #endif
 
+    /* Toggled-on push buttons (Map, the keypad's held controls) wear the
+     * accent colour with black text, light or dark. The rule spells out the
+     * whole box: with only a background colour the style still draws its own
+     * bevel, which darkens it (Breeze), lightens it (Fusion) or ignores it
+     * (Kvantum). The box differs from the native button's, so a toggle in a
+     * layout that must not jump needs a fixed size. */
+    const QColor accent = adamAccentColor();
+    app.setStyleSheet(
+        QStringLiteral(
+            "QPushButton:checked { background-color: %1; color: black;"
+            " border: 1px solid %3; border-radius: 4px; padding: 4px 12px; }"
+            "QPushButton:checked:hover { background-color: %2; }")
+            .arg(accent.name(), accent.lighter(112).name(),
+                 accent.darker(140).name()));
+
     adamsession *session = adamsession_new(nullptr);
     if (!session) {
         fprintf(stderr, "fatal: could not create the session\n");
@@ -43,9 +59,14 @@ int main(int argc, char *argv[])
         fprintf(stderr, "session start: %s\n",
                 adamsession_last_error(session));
 
-    MainWindow win(session);
-    win.show();
-    const int rc = app.exec();
+    int rc;
+    {
+        /* The windows go before the session does: the keypad window still
+         * calls into it as it is hidden. */
+        MainWindow win(session);
+        win.show();
+        rc = app.exec();
+    }
 
     adamsession_free(session);
     return rc;

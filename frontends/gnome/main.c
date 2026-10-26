@@ -11,6 +11,9 @@
 #include "window.h"
 
 static adamsession *g_session;
+/* The main window. Not gtk_application_get_active_window(): that is the
+ * window focused last, which can be the (hidden) keypad or debugger window. */
+static GtkWindow *g_main_window; /* weak: cleared when the window goes */
 
 /* The installed icons are named after the desktop-entry id. Running straight
  * out of the build tree there is nothing installed to look up, so point the
@@ -39,7 +42,8 @@ static void on_activate(AdwApplication *app, gpointer user_data)
     GtkWindow *win;
     (void)user_data;
 
-    win = gtk_application_get_active_window(GTK_APPLICATION(app));
+    adam_css_install();
+    win = g_main_window;
     if (win) {
         gtk_window_present(win);
         return;
@@ -60,6 +64,8 @@ static void on_activate(AdwApplication *app, gpointer user_data)
     }
 
     win = GTK_WINDOW(adam_window_new(app, g_session));
+    g_main_window = win;
+    g_object_add_weak_pointer(G_OBJECT(win), (gpointer *)&g_main_window);
     gtk_window_set_icon_name(win, adam_icon_name());
     gtk_window_present(win);
 }

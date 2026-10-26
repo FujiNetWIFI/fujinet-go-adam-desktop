@@ -2,13 +2,14 @@
  * FujiNet Go Adam -- native Win32 frontend.
  *
  * Mirrors the GTK/Qt/AppKit frontends over the shared adamsession API: a
- * GDI-blitted display letterboxed to the chosen aspect, a present thread
- * that feeds the session's vsync phase-lock from DwmFlush (the Windows
- * analog of the GTK frame clock / CVDisplayLink), full keyboard mapping
- * with the Ctrl+digit controller keypad, a menu bar, media import, and the
- * FujiNet configuration (default browser) and console-log windows.
- * Gamepads are handled inside the core's SDL thread. No on-screen input
- * panels appear unless the user asks.
+ * Direct3D 11 display (GDI as the fallback, see display.c) letterboxed to
+ * the chosen aspect, whose render thread feeds the session's vsync
+ * phase-lock (the Windows analog of the GTK frame clock / CVDisplayLink),
+ * full keyboard mapping through the remappable controller bindings (keys.c),
+ * a menu bar, media import, the Controllers window (F9), and the FujiNet
+ * configuration (default browser) and console-log windows. Gamepads are
+ * handled inside the core's SDL thread. No on-screen input panels appear
+ * unless the user asks.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -16,213 +17,72 @@
 
 #include <windows.h>
 #include <commdlg.h>
-#include <dwmapi.h>
 #include <shellapi.h>
 
-#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "adamsession.h"
 #include "debugger/dbg_window.h"
+#include "display.h"
+#include "keypad/keypad_window.h"
+#include "keys.h"
 #include "resource.h"
-
-#define FB_W ADAMSESSION_FB_WIDTH
-#define FB_H ADAMSESSION_FB_HEIGHT
 
 static adamsession *g_session;
 static HWND g_hwnd;
+static HWND g_display;
+static HMENU g_menu;
 static HWND g_log_window;
 static HWND g_log_edit;
 
-/* Frame hand-off: the present thread converts the latest RGB565 frame to
- * top-down BGRA under this lock; WM_PAINT blits it. */
-static CRITICAL_SECTION g_fb_lock;
-static uint8_t g_bgra[FB_W * FB_H * 4];
-static uint16_t g_fb[FB_W * FB_H];
-static uint64_t g_serial;
-
-static pthread_t g_present_thread;
-static volatile int g_present_run;
 static int g_aspect_mode;
 static int g_smooth;
 static int g_fullscreen;
-static WINDOWPLACEMENT g_prev_placement = {sizeof(g_prev_placement)};
-
-static int64_t monotonic_ns(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-}
-
-/* ---- present thread: vsync pacing + frame conversion --------------------- */
-
-static void *present_main(void *arg)
-{
-    (void)arg;
-    while (g_present_run) {
-        BOOL composited = FALSE;
-        DwmIsCompositionEnabled(&composited);
-        if (composited && SUCCEEDED(DwmFlush())) {
-            /* DwmFlush returned at the compositor's vsync. */
-        } else {
-            Sleep(16); /* no DWM composition (RDP, safe mode): wall clock */
-        }
-        adamsession_notify_vsync(g_session, monotonic_ns());
-
-        if (adamsession_copy_frame(g_session, g_fb, &g_serial)) {
-            int i;
-            EnterCriticalSection(&g_fb_lock);
-            for (i = 0; i < FB_W * FB_H; i++) {
-                uint16_t p = g_fb[i];
-                uint8_t r = (uint8_t)((p >> 11) & 0x1F);
-                uint8_t g = (uint8_t)((p >> 5) & 0x3F);
-                uint8_t b = (uint8_t)(p & 0x1F);
-                g_bgra[i * 4 + 0] = (uint8_t)(b << 3 | b >> 2);
-                g_bgra[i * 4 + 1] = (uint8_t)(g << 2 | g >> 4);
-                g_bgra[i * 4 + 2] = (uint8_t)(r << 3 | r >> 2);
-                g_bgra[i * 4 + 3] = 0xFF;
-            }
-            LeaveCriticalSection(&g_fb_lock);
-            InvalidateRect(g_hwnd, NULL, FALSE);
-        }
-    }
-    return NULL;
-}
+static WINDOWPLACEMENT g_prev_placement;
 
 /* ---- display ------------------------------------------------------------- */
 
-static RECT dest_rect(int cw, int ch)
+/* The picture fills the client. */
+static void layout_display(void)
 {
-    double dw, dh;
-    RECT r;
-    if (g_aspect_mode == 2) { /* integer scale */
-        int scale = (int)((cw / FB_W < ch / FB_H) ? cw / FB_W : ch / FB_H);
-        if (scale < 1) scale = 1;
-        dw = scale * FB_W;
-        dh = scale * FB_H;
-    } else {
-        double aspect =
-            g_aspect_mode == 1 ? 4.0 / 3.0 : (double)FB_W / FB_H;
-        if ((double)cw / ch > aspect) {
-            dh = ch;
-            dw = ch * aspect;
-        } else {
-            dw = cw;
-            dh = cw / aspect;
-        }
-    }
-    r.left = (LONG)((cw - dw) / 2);
-    r.top = (LONG)((ch - dh) / 2);
-    r.right = r.left + (LONG)dw;
-    r.bottom = r.top + (LONG)dh;
-    return r;
-}
-
-static void paint(HWND hwnd)
-{
-    PAINTSTRUCT ps;
-    HDC hdc = BeginPaint(hwnd, &ps);
-    RECT client;
-    BITMAPINFO bmi;
-    RECT d;
-
-    GetClientRect(hwnd, &client);
-    FillRect(hdc, &client, (HBRUSH)GetStockObject(BLACK_BRUSH));
-
-    memset(&bmi, 0, sizeof(bmi));
-    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
-    bmi.bmiHeader.biWidth = FB_W;
-    bmi.bmiHeader.biHeight = -FB_H; /* top-down */
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    d = dest_rect(client.right, client.bottom);
-    SetStretchBltMode(hdc, g_smooth ? HALFTONE : COLORONCOLOR);
-    EnterCriticalSection(&g_fb_lock);
-    StretchDIBits(hdc, d.left, d.top, d.right - d.left, d.bottom - d.top, 0,
-                  0, FB_W, FB_H, g_bgra, &bmi, DIB_RGB_COLORS, SRCCOPY);
-    LeaveCriticalSection(&g_fb_lock);
-
-    EndPaint(hwnd, &ps);
+    RECT rc;
+    if (!g_display)
+        return;
+    GetClientRect(g_hwnd, &rc);
+    MoveWindow(g_display, 0, 0, rc.right, rc.bottom, TRUE);
 }
 
 /* ---- keyboard ------------------------------------------------------------ */
 
-/* The EOS special keys (arrows, F1-F6, Home, Insert, Delete) come via
- * WM_KEYDOWN; printable characters and control codes (incl. Ctrl+letter)
- * arrive already translated as WM_CHAR. The two sets do not overlap. */
-static int special_keysym(WPARAM vk)
-{
-    switch (vk) {
-    case VK_UP:     return 0xFF52;
-    case VK_DOWN:   return 0xFF54;
-    case VK_LEFT:   return 0xFF51;
-    case VK_RIGHT:  return 0xFF53;
-    case VK_HOME:   return 0xFF50;
-    case VK_INSERT: return 0xFF63;
-    case VK_DELETE: return 0xFFFF;
-    default:
-        if (vk >= VK_F1 && vk <= VK_F6)
-            return 0xFFBE + (int)(vk - VK_F1);
-        return 0;
-    }
-}
-
 static void toggle_fullscreen(HWND hwnd);
 static void open_debugger(void);
+static void open_keypad(void);
 
-static int on_keydown(HWND hwnd, WPARAM vk)
+/* F9 / F11 / F12 are the app's own and never reach the controller bindings
+ * (Map mode refuses them); F10 stays with the system menu. */
+static int on_key(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-    int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    int keysym;
+    const int press =
+        (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lp & (1 << 30));
 
-    switch (vk) {
+    switch (wp) {
     case VK_F10:
         return 0; /* let the system open the menu */
+    case VK_F9:
+        if (press) open_keypad();
+        return 1;
     case VK_F11:
-        toggle_fullscreen(hwnd);
+        if (press) toggle_fullscreen(hwnd);
         return 1;
     case VK_F12:
-        open_debugger();
+        if (press) open_debugger();
         return 1;
     default:
-        break;
+        return adam_win_key_msg(g_session, msg, wp, lp);
     }
-
-    if (ctrl && vk >= '0' && vk <= '9') {
-        adamsession_joystick_raw(
-            g_session, 0,
-            adam_controller_encode(0, 0, 0, 0, 0, 0, (int)(vk - '0')));
-        return 1;
-    }
-
-    keysym = special_keysym(vk);
-    if (keysym) {
-        int code = adam_key_from_event((uint32_t)keysym, 0, 0);
-        if (code >= 0)
-            adamsession_key(g_session, (uint8_t)code);
-        return 1;
-    }
-    return 0;
-}
-
-static void on_keyup(WPARAM vk)
-{
-    if (vk >= '0' && vk <= '9')
-        adamsession_joystick_raw(g_session, 0,
-                                 adam_controller_encode(0, 0, 0, 0, 0, 0, -1));
-}
-
-static void on_char(WPARAM ch)
-{
-    if (ch >= 1 && ch <= 0x7E)
-        adamsession_key(g_session, (uint8_t)ch);
 }
 
 /* ---- menu actions -------------------------------------------------------- */
@@ -298,6 +158,8 @@ static void show_fujinet_config(void)
 
 #define LOG_TIMER_ID 1
 
+static char g_log_shown[128 * 1024]; /* what the edit control holds now */
+
 static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -307,10 +169,50 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER: {
         static char buf[128 * 1024];
         int n = adamsession_fujinet_copy_log(g_session, buf, sizeof(buf));
-        SetWindowTextA(g_log_edit,
-                       n > 0 ? buf : "(no FujiNet output yet)");
-        SendMessageA(g_log_edit, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-        SendMessageA(g_log_edit, EM_SCROLLCARET, 0, 0);
+        const char *text = n > 0 ? buf : "(no FujiNet output yet)";
+        LRESULT first, lines;
+        RECT rc;
+        HDC dc;
+        int visible = 1, at_end;
+
+        /* Unchanged: leave the control alone (keeps the scroll position and
+         * any selection). */
+        if (strcmp(text, g_log_shown) == 0)
+            return 0;
+        snprintf(g_log_shown, sizeof(g_log_shown), "%s", text);
+
+        /* Follow the tail only while the reader is already at the bottom;
+         * otherwise put them back on the line they were reading. */
+        first = SendMessageA(g_log_edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+        lines = SendMessageA(g_log_edit, EM_GETLINECOUNT, 0, 0);
+        GetClientRect(g_log_edit, &rc);
+        dc = GetDC(g_log_edit);
+        if (dc) {
+            HGDIOBJ old = SelectObject(
+                dc, (HGDIOBJ)SendMessageA(g_log_edit, WM_GETFONT, 0, 0));
+            TEXTMETRICA tm;
+            if (GetTextMetricsA(dc, &tm) && tm.tmHeight > 0)
+                visible = (rc.bottom - rc.top) / tm.tmHeight;
+            SelectObject(dc, old);
+            ReleaseDC(g_log_edit, dc);
+        }
+        at_end = first + (visible > 0 ? visible : 1) >= lines;
+
+        SendMessageA(g_log_edit, WM_SETREDRAW, FALSE, 0);
+        SetWindowTextA(g_log_edit, text);
+        if (at_end) {
+            /* caret to the end (a (-1, -1) selection only drops the old one,
+             * leaving the caret at the top of the fresh text) */
+            int end = GetWindowTextLengthA(g_log_edit);
+            SendMessageA(g_log_edit, EM_SETSEL, (WPARAM)end, (LPARAM)end);
+            SendMessageA(g_log_edit, EM_SCROLLCARET, 0, 0);
+        } else {
+            LRESULT now =
+                SendMessageA(g_log_edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+            SendMessageA(g_log_edit, EM_LINESCROLL, 0, (LPARAM)(first - now));
+        }
+        SendMessageA(g_log_edit, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(g_log_edit, NULL, TRUE);
         return 0;
     }
     case WM_CLOSE:
@@ -350,13 +252,22 @@ static void show_fujinet_log(HINSTANCE inst)
         0, 0, 0, 0, g_log_window, NULL, inst, NULL);
     SendMessageA(g_log_edit, WM_SETFONT,
                  (WPARAM)GetStockObject(ANSI_FIXED_FONT), TRUE);
+    g_log_shown[0] = '\0';
     SetTimer(g_log_window, LOG_TIMER_ID, 1000, NULL);
+    SendMessageA(g_log_window, WM_TIMER, LOG_TIMER_ID, 0);
     ShowWindow(g_log_window, SW_SHOW);
 }
 
+/* F12 / View > Debugger: show it (which stops the machine), or hide it and
+ * let the machine run. */
 static void open_debugger(void)
 {
-    adam_debugger_show(g_hwnd, g_session);
+    adam_debugger_toggle(g_hwnd, g_session);
+}
+
+static void open_keypad(void)
+{
+    adam_keypad_window_toggle(g_hwnd, g_session);
 }
 
 /* ---- fullscreen ---------------------------------------------------------- */
@@ -365,7 +276,8 @@ static void toggle_fullscreen(HWND hwnd)
 {
     DWORD style = (DWORD)GetWindowLongPtr(hwnd, GWL_STYLE);
     if (!g_fullscreen) {
-        MONITORINFO mi = {sizeof(mi)};
+        MONITORINFO mi;
+        mi.cbSize = sizeof(mi);
         if (GetWindowPlacement(hwnd, &g_prev_placement) &&
             GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY),
                            &mi)) {
@@ -379,6 +291,7 @@ static void toggle_fullscreen(HWND hwnd)
         }
     } else {
         SetWindowLongPtr(hwnd, GWL_STYLE, style | WS_OVERLAPPEDWINDOW);
+        SetMenu(hwnd, g_menu);
         SetWindowPlacement(hwnd, &g_prev_placement);
         SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
@@ -416,6 +329,7 @@ static HMENU build_menu(void)
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)fujinet, "&FujiNet");
 
     AppendMenuA(view, MF_STRING, IDM_FULLSCREEN, "Fullscreen\tF11");
+    AppendMenuA(view, MF_STRING, IDM_KEYPAD, "Controllers\tF9");
     AppendMenuA(view, MF_STRING, IDM_DEBUGGER, "Debugger\tF12");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)view, "&View");
 
@@ -428,35 +342,30 @@ static void apply_display_settings(void)
 {
     g_aspect_mode = adamsession_get_int(g_session, "aspect_mode", 0);
     g_smooth = adamsession_get_int(g_session, "smooth_scaling", 0);
+    adam_display_set_options(g_aspect_mode, g_smooth);
 }
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
-    case WM_PAINT:
-        paint(hwnd);
-        return 0;
     case WM_ERASEBKGND:
-        return 1; /* paint() clears; avoid flicker */
+        return 1; /* the display child covers the client */
     case WM_SIZE:
-        /* A resize only invalidates the newly exposed strips, and BeginPaint
-         * clips the repaint to them -- the rest of the client area would keep
-         * the image blitted at the old size (visible as a ghost after
-         * maximize or F11). Ask for the whole client area instead. */
-        InvalidateRect(hwnd, NULL, FALSE);
+        layout_display();
         return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
-        if (on_keydown(hwnd, wp))
-            return 0;
-        break;
     case WM_KEYUP:
     case WM_SYSKEYUP:
-        on_keyup(wp);
+        if (on_key(hwnd, msg, wp, lp))
+            return 0;
         break;
     case WM_CHAR:
-        on_char(wp);
+        adam_win_char(g_session, wp);
         return 0;
+    case WM_KILLFOCUS:
+        adamsession_release_all(g_session);
+        break;
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDM_RESET_ADAM: adamsession_reset(g_session, 0); break;
@@ -470,15 +379,30 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                                                          GWLP_HINSTANCE));
             break;
         case IDM_FULLSCREEN: toggle_fullscreen(hwnd); break;
+        case IDM_KEYPAD:     open_keypad(); break;
         case IDM_DEBUGGER:   open_debugger(); break;
-        case IDM_ABOUT:
-            MessageBoxA(hwnd,
-                        "FujiNet Go Adam " ADAM_VERSION_STRING "\n"
-                        "Self-contained Coleco ADAM with built-in FujiNet.\n"
-                        "Copyright (C) 2026 Thomas Cherryhomes\n"
-                        "GPL-3.0-or-later",
-                        "About FujiNet Go Adam", MB_ICONINFORMATION);
+        case IDM_ABOUT: {
+            /* MB_USERICON with the app's own icon, not a stock Windows one. */
+            MSGBOXPARAMSA mb;
+            char text[512];
+            snprintf(text, sizeof(text),
+                     "FujiNet Go Adam " ADAM_VERSION_STRING "\n"
+                     "Self-contained Coleco ADAM with built-in FujiNet.\n"
+                     "Copyright (C) 2026 Thomas Cherryhomes\n"
+                     "GPL-3.0-or-later\n\n"
+                     "Display: %s",
+                     adam_display_renderer());
+            memset(&mb, 0, sizeof(mb));
+            mb.cbSize = sizeof(mb);
+            mb.hwndOwner = hwnd;
+            mb.hInstance = (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE);
+            mb.lpszText = text;
+            mb.lpszCaption = "About FujiNet Go Adam";
+            mb.dwStyle = MB_OK | MB_USERICON;
+            mb.lpszIcon = MAKEINTRESOURCEA(IDI_APPICON);
+            MessageBoxIndirectA(&mb);
             break;
+        }
         case IDM_EXIT: DestroyWindow(hwnd); break;
         }
         return 0;
@@ -498,7 +422,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     (void)cmd;
 
     SetProcessDPIAware();
-    InitializeCriticalSection(&g_fb_lock);
+    g_prev_placement.length = sizeof(g_prev_placement);
 
     g_session = adamsession_new(NULL);
     if (!g_session) {
@@ -526,32 +450,32 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     wc.hIconSm = wc.hIcon;
     RegisterClassExA(&wc);
 
+    g_menu = build_menu();
     g_hwnd = CreateWindowExA(
         0, "AdamMainWindow", "FujiNet Go Adam", WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1088, 950, NULL, build_menu(), inst,
-        NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 1088, 950, NULL, g_menu, inst, NULL);
     if (!g_hwnd)
         return 1;
+    g_display = adam_display_create(g_hwnd, g_session);
+    layout_display();
     ShowWindow(g_hwnd, show);
 
-    g_present_run = 1;
-    pthread_create(&g_present_thread, NULL, present_main, NULL);
-
+    /* Developer affordances, matching the other frontends. */
+    if (getenv("ADAM_OPEN_KEYPAD"))
+        open_keypad();
     if (getenv("ADAM_OPEN_DEBUGGER"))
-        open_debugger();
+        adam_debugger_show(g_hwnd, g_session);
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
-        /* The debugger's F5/F7/F8 accelerators get first refusal while its
-         * window (or one of its fields) has the focus. */
+        /* The debugger's F5/F7/F8/F9/F12 accelerators get first refusal
+         * while its window (or one of its fields) has the focus. */
         if (adam_debugger_pretranslate(&msg))
             continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
 
-    g_present_run = 0;
-    pthread_join(g_present_thread, NULL);
+    adam_display_destroy();
     adamsession_free(g_session);
-    DeleteCriticalSection(&g_fb_lock);
     return (int)msg.wParam;
 }

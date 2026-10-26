@@ -3,8 +3,9 @@
  * letterboxed to the chosen aspect. A CVDisplayLink provides the vsync
  * ticks that feed the session's phase-lock (the macOS analog of the GTK
  * frame clock / Qt frameSwapped loop) and schedules main-thread repaints.
- * Keyboard events are translated to ADAM key bytes here; Ctrl+digit
- * presses the game-controller keypad like the other frontends.
+ * Keyboard events go through KeyForward: the session's controller
+ * bindings first (Ctrl+digit presses the game-controller keypad, as in the
+ * other frontends), the ADAM keyboard for the rest.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -13,6 +14,8 @@
 #import "DisplayView.h"
 
 #import <CoreVideo/CoreVideo.h>
+
+#import "KeyForward.h"
 
 #include <time.h>
 
@@ -25,7 +28,6 @@
     CGImageRef _image;
     int _aspectMode;
     BOOL _smooth;
-    BOOL _keypadDown;
 }
 
 static int64_t monotonic_ns(void)
@@ -195,61 +197,30 @@ static CVReturn link_cb(CVDisplayLinkRef link, const CVTimeStamp *now,
     return YES;
 }
 
+/* Losing the keyboard with keys held would leave the machine believing they
+ * are still down. (Losing key status altogether is the window delegate's.) */
+- (BOOL)resignFirstResponder
+{
+    ADAMKeyFocusLost(_session);
+    return YES;
+}
+
 - (void)keyDown:(NSEvent *)event
 {
-    NSString *chars = event.charactersIgnoringModifiers;
-    unichar c = chars.length ? [chars characterAtIndex:0] : 0;
-    const BOOL ctrl =
-        (event.modifierFlags & NSEventModifierFlagControl) != 0;
-
-    /* Ctrl+digit presses the game-controller keypad. */
-    if (ctrl && c >= '0' && c <= '9') {
-        adamsession_joystick_raw(
-            _session, 0,
-            adam_controller_encode(0, 0, 0, 0, 0, 0, c - '0'));
-        _keypadDown = YES;
-        return;
-    }
-
-    uint32_t keysym = 0;
-    switch (c) {
-    case NSUpArrowFunctionKey:    keysym = 0xFF52; break;
-    case NSDownArrowFunctionKey:  keysym = 0xFF54; break;
-    case NSLeftArrowFunctionKey:  keysym = 0xFF51; break;
-    case NSRightArrowFunctionKey: keysym = 0xFF53; break;
-    case NSHomeFunctionKey:       keysym = 0xFF50; break;
-    case NSInsertFunctionKey:     keysym = 0xFF63; break;
-    case NSDeleteFunctionKey:     keysym = 0xFFFF; break; /* forward del */
-    case 0x7F:                    keysym = 0xFF08; break; /* backspace */
-    case 0x0D: case 0x03:         keysym = 0xFF0D; break;
-    case 0x09:                    keysym = 0xFF09; break;
-    case 0x1B:                    keysym = 0xFF1B; break;
-    default:
-        if (c >= NSF1FunctionKey && c <= NSF1FunctionKey + 5)
-            keysym = 0xFFBE + (uint32_t)(c - NSF1FunctionKey);
-        break;
-    }
-
-    uint32_t unicode = (c >= 0x20 && c < 0xF700) ? c : 0;
-    int code = adam_key_from_event(keysym ? keysym : unicode, unicode,
-                                   ctrl ? 1 : 0);
-    if (code >= 0) {
-        adamsession_key(_session, (uint8_t)code);
-        return;
-    }
-    [super keyDown:event];
+    if (!ADAMKeyDown(_session, event))
+        [super keyDown:event];
 }
 
 - (void)keyUp:(NSEvent *)event
 {
-    (void)event;
-    if (_keypadDown) {
-        _keypadDown = NO;
-        adamsession_joystick_raw(
-            _session, 0, adam_controller_encode(0, 0, 0, 0, 0, 0, -1));
-        return;
-    }
-    /* The ADAM keyboard is type-a-byte; releases carry no information. */
+    ADAMKeyUp(_session, event);
+}
+
+/* Modifier keys arrive as flagsChanged, not keyDown/keyUp; a binding moved
+ * onto Shift, Control or Option would otherwise never press. */
+- (void)flagsChanged:(NSEvent *)event
+{
+    ADAMFlagsChanged(_session, event);
 }
 
 @end

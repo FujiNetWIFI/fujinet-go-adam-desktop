@@ -209,7 +209,8 @@ int paths_init(adamsession *s, const adamsession_paths *p)
     snprintf(s->cart_dir, sizeof(s->cart_dir), "%s/carts", s->data_dir);
     mkdir_p(s->cart_dir);
 
-    if (p && p->fujinet_lib) /* may be "" = explicitly disabled */
+    s->fujinet_lib_disabled = p && p->fujinet_lib && !*p->fujinet_lib;
+    if (p && p->fujinet_lib) /* "" = explicitly disabled */
         snprintf(s->fujinet_lib, sizeof(s->fujinet_lib), "%s", p->fujinet_lib);
     else
         s->fujinet_lib[0] = '\0'; /* resolved in paths_provision_fujinet */
@@ -247,7 +248,7 @@ int paths_provision_fujinet(adamsession *s)
     /* Resolve the shared library unless the caller pinned/disabled it.
      * Every platform's name is probed so this path layer is shared
      * unchanged (.so Linux, .dylib macOS, .dll Windows). */
-    if (!s->fujinet_lib[0]) {
+    if (!s->fujinet_lib[0] && !s->fujinet_lib_disabled) {
         static const char *const names[] = {
             "libfujinet.so", "libfujinet.dylib", "fujinet.dll"};
         const char *const dirs[] = {exe_dir(), ADAM_INSTALL_LIBDIR,

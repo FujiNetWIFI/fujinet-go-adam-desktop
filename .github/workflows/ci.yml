@@ -402,7 +402,7 @@ jobs:
           - frontend: gnome
             app-id: online.fujinet.go.adam.gnome
             runtime: org.gnome.Platform//49 org.gnome.Sdk//49
-            bundle: FujiNet-Go-Adam.flatpak
+            bundle: FujiNet-Go-Adam-gnome.flatpak
           - frontend: kde
             app-id: online.fujinet.go.adam.kde
             runtime: org.kde.Platform//6.11 org.kde.Sdk//6.11
@@ -478,8 +478,8 @@ jobs:
             -exec cp {} release/ \;
           cp "artifacts/FujiNet-Go-Adam-macos/FujiNet-Go-Adam-macos.zip" \
              "release/FujiNet-Go-Adam-${tag}-macos.zip"
-          cp "artifacts/FujiNet-Go-Adam-flatpak-gnome/FujiNet-Go-Adam.flatpak" \
-             "release/FujiNet-Go-Adam-${tag}.flatpak"
+          cp "artifacts/FujiNet-Go-Adam-flatpak-gnome/FujiNet-Go-Adam-gnome.flatpak" \
+             "release/FujiNet-Go-Adam-${tag}-gnome.flatpak"
           cp "artifacts/FujiNet-Go-Adam-flatpak-kde/FujiNet-Go-Adam-kde.flatpak" \
              "release/FujiNet-Go-Adam-${tag}-kde.flatpak"
           (cd artifacts/FujiNet-Go-Adam-windows \

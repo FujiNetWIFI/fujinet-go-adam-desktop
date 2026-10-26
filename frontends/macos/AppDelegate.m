@@ -14,7 +14,9 @@
 #import <WebKit/WebKit.h>
 
 #import "DisplayView.h"
+#import "KeyForward.h"
 #import "debugger/DebuggerWindow.h"
+#import "keypad/KeypadWindow.h"
 
 #include <stdlib.h>
 
@@ -245,10 +247,18 @@ static NSArray<NSString *> *machineSettingKeys(void)
     [_logView scrollToEndOfDocument:nil];
 }
 
-- (void)showDebugger:(id)sender
+/* F12 and View ▸ Debugger: shows the window (which stops the machine) or
+ * closes it (which lets it run). */
+- (void)toggleDebugger:(id)sender
 {
     (void)sender;
-    [DebuggerWindow showForSession:_session];
+    [DebuggerWindow toggleForSession:_session];
+}
+
+- (void)toggleKeypad:(id)sender
+{
+    (void)sender;
+    [ADAMKeypadWindow toggleWithSession:_session];
 }
 
 /* ---- settings ------------------------------------------------------------- */
@@ -426,6 +436,14 @@ static NSArray<NSString *> *machineSettingKeys(void)
     [self restartSession];
 }
 
+/* Losing key status with keys held would leave the machine believing they
+ * are still down. */
+- (void)windowDidResignKey:(NSNotification *)note
+{
+    if (note.object == _window)
+        ADAMKeyFocusLost(_session);
+}
+
 /* ---- menus ---------------------------------------------------------------- */
 
 - (NSMenuItem *)item:(NSString *)title action:(SEL)sel key:(NSString *)key
@@ -530,8 +548,11 @@ static NSArray<NSString *> *machineSettingKeys(void)
                               keyEquivalent:@"f"];
     fs.keyEquivalentModifierMask =
         NSEventModifierFlagControl | NSEventModifierFlagCommand;
+    [view addItem:[self item:@"Controllers"
+                      action:@selector(toggleKeypad:)
+                         key:@"k"]];
     NSMenuItem *dbg = [self item:@"Debugger"
-                          action:@selector(showDebugger:)
+                          action:@selector(toggleDebugger:)
                              key:[NSString stringWithFormat:@"%C",
                                            (unichar)NSF12FunctionKey]];
     dbg.keyEquivalentModifierMask = 0;
@@ -584,6 +605,7 @@ static NSArray<NSString *> *machineSettingKeys(void)
                     backing:NSBackingStoreBuffered
                       defer:NO];
     _window.title = @"FujiNet Go Adam";
+    _window.delegate = self;
     _window.contentMinSize =
         NSMakeSize(ADAMSESSION_FB_WIDTH, ADAMSESSION_FB_HEIGHT);
 
@@ -601,6 +623,8 @@ static NSArray<NSString *> *machineSettingKeys(void)
     /* Developer affordance shared with the other frontends. */
     if (getenv("ADAM_OPEN_DEBUGGER"))
         [DebuggerWindow showForSession:_session];
+    if (getenv("ADAM_OPEN_KEYPAD"))
+        [ADAMKeypadWindow toggleWithSession:_session];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)note

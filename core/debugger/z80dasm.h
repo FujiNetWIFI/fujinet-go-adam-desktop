@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 
-/* One decoded instruction; text/flags conventions match adamdasm_line in
+/* One decoded instruction; text/flags conventions match adamdebug_line in
  * adamdebug.h (which embeds this data). */
 typedef struct {
     uint16_t addr;

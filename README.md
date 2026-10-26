@@ -17,7 +17,7 @@ Every target is a **native frontend** built from one shared core:
 | GNOME | GTK4 + libadwaita (+ WebKitGTK) | `fujinet-go-adam-gnome` | complete |
 | KDE | Qt6 Widgets (+ QtWebEngine) | `fujinet-go-adam-kde` | complete |
 | macOS | AppKit (+ WKWebView) | `FujiNet Go Adam.app` | complete (incl. debugger + bundled FujiNet) |
-| Windows | Win32 (GDI + DwmFlush) | `fujinet-go-adam-windows.exe` | complete (incl. debugger + bundled FujiNet); CI-built, needs Windows testers |
+| Windows | Win32 (Direct3D 11) | `fujinet-go-adam-windows.exe` | complete (incl. debugger + bundled FujiNet); CI-built, needs Windows testers |
 
 The maintainer develops on Linux without Mac or Windows hardware: those
 builds are compiled and tested on CI's macOS and Windows runners (each
@@ -34,9 +34,15 @@ platforms are very welcome.
 - In-process FujiNet: disk/DDP mounting, TNFS hosts, and network config
   through the embedded FujiNet web UI (`FujiNet ▸ Configuration`), plus a
   live console-log window.
-- Automatic gamepad support with hotplug (SDL3; A/X = left fire,
-  B/Y = right fire, left stick or d-pad). `Ctrl+digit` presses the game
-  controller's keypad (game select on cartridges and tape games).
+- Controllers (`F9`, ⌘K on macOS): a floating window with both ColecoVision
+  controllers — keypad, stick and fire buttons — to click, and **Map** to
+  rebind any control to a key or a gamepad button (**Clear** unbinds it,
+  **Defaults** restores the map). Controller 1's stick is on the numeric
+  keypad by default (8/4/6/2, `0` = left fire, `Enter` = right fire, `*` and
+  `/` = the keypad's `*` and `#`); every other key types on the ADAM's
+  keyboard, and `Ctrl+digit` still presses the keypad's digit (game select).
+- Automatic gamepad support with hotplug (SDL3; A = left fire, B = right
+  fire, left stick or d-pad steer; the other buttons can be mapped).
 - Import `.dsk`/`.ddp` images into the FujiNet SD folder; load `.rom`/
   `.col`/`.bin` cartridges (boots in ColecoVision mode).
 - Shared settings: palette, expansion module, joystick mode, aspect mode…
@@ -47,18 +53,28 @@ platforms are very welcome.
 
 ### Developer debugger (F12)
 
-Breakpoints, pause/step into/over/out, run-to, instruction history
-(trace), a Z80 disassembler annotated with **EOS and OS7 symbols**
-(generated from Richard F. Drushel's EOS-5 disassembly, the eoslib
-jump-table names, and the os7lib listing — see `tools/symbols/`), memory
-and register editing while paused, and live VDP views: nametable, pattern
-banks, sprites (with SAT decode), and palette. The **FujiNet** tab shows
-every AdamNet packet between the ADAM and FujiNet, both ways, named and in
-hex, with the BoIP link's state beside it; it records from launch, and
-repeats (the idle keepalive, a poll) are folded into one line with a count.
+A console and a Z80 debugger: execute breakpoints with conditions, ranges,
+hit counts and enable/disable; **memory read/write and port in/out
+watchpoints**; pause, step into/over/out, run a frame, run to the cursor;
+a disassembler annotated with **EOS and OS7 symbols** (generated from
+Richard F. Drushel's EOS-5 disassembly, the eoslib jump-table names, and the
+os7lib listing — see `tools/symbols/`; more from `.sym`/`.map`/`.noi`
+files); register, flag and memory editing while stopped; the ADAM's memory
+map and I/O state; and live VDP views: nametable, pattern banks, sprites
+(with SAT decode), palette and VRAM. The **FujiNet** tab shows every AdamNet
+packet between the ADAM and FujiNet, both ways, named and in hex, with the
+BoIP link's state beside it; it records from launch, and repeats (the idle
+keepalive, a poll) are folded into one line with a count.
 
-Keys: `F5` pause/continue · `F7` step into · `F8` step over ·
-`Shift+F8` step out · click a disassembly line to toggle a breakpoint.
+The current instruction is highlighted in the app's accent colour,
+breakpoints are red (grey when disabled), and the selected line is the
+toolkit's selection colour. The console takes `help`, `regs`, `bp`/`bpr`/
+`bpw`/`bpin`/`bpout [cond]`, `trace`, and expressions with registers and
+labels (`$` for hex).
+
+Keys: `F5` stop/run · `F7` step · `F8` step over · `Shift+F8` step out ·
+`Shift+F7` frame · `F9` toggle the selected line's breakpoint · `F12`
+show/hide. Opening the debugger stops the machine; closing it lets it run.
 `ADAM_OPEN_DEBUGGER=1` opens the debugger at launch. Available in every
 frontend — GTK, Qt, AppKit and Win32 — over the one shared engine.
 
@@ -129,7 +145,7 @@ Useful environment switches: `ADAM_PACE_LOG=1` (per-second frame pacing
 diagnostics), `FUJINET_QUIET_BLOCKS=1` (suppress per-block disk log
 lines), `FUJINET_WEBUI_BIND=addr:port` (force the web UI to a fixed bind
 instead of the random free port picked each run), `ADAM_OPEN_DEBUGGER=1`,
-`ADAM_DEBUGGER_TAB=vdp|trace|fujinet` (debugger start tab).
+`ADAM_DEBUGGER_TAB=0..6` or a tab name (debugger start tab), `ADAM_OPEN_KEYPAD=1` (controllers window at launch); Windows: `ADAM_RENDERER=gdi` forces the GDI fallback, `ADAM_FPS=1` prints the renderer and frame rates.
 
 The web admin normally binds a random free loopback port each run (the
 FujiNet Configuration window always points at whichever one was picked) so a
@@ -231,7 +247,7 @@ all of it passes, publishes the packages it produced as release assets:
 | `FujiNet-Go-Adam-<version>-macos.zip` | the `.app` bundle (SDL and FujiNet inside) |
 | `FujiNet-Go-Adam-<version>-windows.zip` | the exe, `fujinet.dll`, and the `fujinet/` runtime tree |
 | `FujiNet-Go-Adam-<version>-windows-setup.exe` | NSIS installer (per-user, no admin rights) |
-| `FujiNet-Go-Adam-<version>.flatpak` | single-file bundle: `flatpak install ./…flatpak` |
+| `FujiNet-Go-Adam-<version>-gnome.flatpak` | single-file bundle: `flatpak install ./…flatpak` |
 | `FujiNet-Go-Adam-<version>-kde.flatpak` | same, for the KDE frontend |
 
 The version is declared in the tree, not derived from the tag, so that a

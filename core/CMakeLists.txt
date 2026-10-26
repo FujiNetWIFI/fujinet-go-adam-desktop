@@ -58,10 +58,15 @@ add_library(adamsession STATIC
   src/settings.c
   src/paths.c
   src/input_map.c
+  src/input.c
+  src/bindings.c
+  src/hid_keys.c
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c
   debugger/debugger.c
+  debugger/prompt.c
+  debugger/expr.c
   debugger/fujitrace.c
   debugger/z80dasm.c
   debugger/symbols.c
@@ -89,7 +94,7 @@ target_compile_definitions(adamsession PRIVATE
 # the math functions live in the CRT.
 target_link_libraries(adamsession PUBLIC SDL3::SDL3 Threads::Threads)
 if(WIN32)
-  target_link_libraries(adamsession PUBLIC ws2_32)
+  target_link_libraries(adamsession PUBLIC ws2_32 winmm)
 else()
   target_link_libraries(adamsession PUBLIC dl m)
 endif()
@@ -98,6 +103,10 @@ set_property(TARGET adamsession PROPERTY POSITION_INDEPENDENT_CODE ON)
 # ---- tests -----------------------------------------------------------------
 add_executable(input_test tests/input_test.c)
 target_link_libraries(input_test adamsession)
+
+add_executable(bindings_test tests/bindings_test.c)
+target_link_libraries(bindings_test adamsession)
+target_include_directories(bindings_test PRIVATE src)
 
 add_executable(boot_smoke tests/boot_smoke.c)
 target_link_libraries(boot_smoke adamsession)
@@ -127,6 +136,7 @@ target_link_libraries(fujitrace_test adamsession)
 target_include_directories(fujitrace_test PRIVATE debugger)
 
 add_test(NAME input COMMAND input_test)
+add_test(NAME bindings COMMAND bindings_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME debug_boot COMMAND debug_boot_test)

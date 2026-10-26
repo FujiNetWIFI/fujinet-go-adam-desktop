@@ -3,10 +3,10 @@
  * QOpenGLWidget, letterboxed to the chosen aspect. The frameSwapped signal
  * (vsync-aligned with the default swap interval of 1) both feeds the
  * session's vsync phase-lock and schedules the next repaint, forming a
- * self-sustaining vsync-paced present loop. Keyboard events are translated
- * to ADAM key bytes here; ShortcutOverride is accepted for everything except
- * F10/F11/F12 so menu accelerators cannot steal emulator keys while the
- * display has focus.
+ * self-sustaining vsync-paced present loop. Keyboard events go through
+ * adamForwardKey (controller bindings first, then the ADAM keyboard);
+ * ShortcutOverride is accepted for everything except F9/F10/F11/F12 so menu
+ * accelerators cannot steal emulator keys while the display has focus.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -14,10 +14,13 @@
 
 #include "DisplayWidget.h"
 
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QPainter>
 
 #include <ctime>
+
+#include "KeyForward.h"
 
 namespace {
 
@@ -26,45 +29,6 @@ qint64 monotonic_ns()
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (qint64)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-}
-
-/* Map the Qt key event onto the X keysym + unicode contract of
- * adam_key_from_event so both frontends share one mapping table. */
-int adamCodeForKey(const QKeyEvent *event)
-{
-    quint32 keysym = 0;
-    switch (event->key()) {
-    case Qt::Key_Return:
-    case Qt::Key_Enter:     keysym = 0xFF0D; break;
-    case Qt::Key_Escape:    keysym = 0xFF1B; break;
-    case Qt::Key_Tab:       keysym = 0xFF09; break;
-    case Qt::Key_Backspace: keysym = 0xFF08; break;
-    case Qt::Key_Delete:    keysym = 0xFFFF; break;
-    case Qt::Key_Insert:    keysym = 0xFF63; break;
-    case Qt::Key_Undo:      keysym = 0xFF65; break;
-    case Qt::Key_Home:      keysym = 0xFF50; break;
-    case Qt::Key_Left:      keysym = 0xFF51; break;
-    case Qt::Key_Up:        keysym = 0xFF52; break;
-    case Qt::Key_Right:     keysym = 0xFF53; break;
-    case Qt::Key_Down:      keysym = 0xFF54; break;
-    default:
-        if (event->key() >= Qt::Key_F1 && event->key() <= Qt::Key_F6)
-            keysym = 0xFFBE + (quint32)(event->key() - Qt::Key_F1);
-        break;
-    }
-
-    const bool ctrl = event->modifiers().testFlag(Qt::ControlModifier);
-    quint32 unicode = 0;
-    if (!event->text().isEmpty())
-        unicode = event->text().at(0).unicode();
-
-    if (keysym == 0) {
-        if (ctrl && event->key() >= Qt::Key_A && event->key() <= Qt::Key_Z)
-            keysym = 'a' + (quint32)(event->key() - Qt::Key_A);
-        else
-            keysym = unicode;
-    }
-    return adam_key_from_event(keysym, unicode, ctrl ? 1 : 0);
 }
 
 } // namespace
@@ -147,12 +111,12 @@ void DisplayWidget::paintGL()
 
 bool DisplayWidget::event(QEvent *event)
 {
-    /* Claim every key except the three reserved chords while focused, so
+    /* Claim every key except the four reserved chords while focused, so
      * menu accelerators can't shadow what the ADAM should receive. */
     if (event->type() == QEvent::ShortcutOverride) {
         QKeyEvent *ke = static_cast<QKeyEvent *>(event);
-        if (ke->key() != Qt::Key_F10 && ke->key() != Qt::Key_F11 &&
-            ke->key() != Qt::Key_F12) {
+        if (ke->key() != Qt::Key_F9 && ke->key() != Qt::Key_F10 &&
+            ke->key() != Qt::Key_F11 && ke->key() != Qt::Key_F12) {
             event->accept();
             return true;
         }
@@ -160,23 +124,16 @@ bool DisplayWidget::event(QEvent *event)
     return QOpenGLWidget::event(event);
 }
 
+/* Tab belongs to the ADAM keyboard (and to Map mode), not to focus
+ * traversal. */
+bool DisplayWidget::focusNextPrevChild(bool)
+{
+    return false;
+}
+
 void DisplayWidget::keyPressEvent(QKeyEvent *event)
 {
-    /* Ctrl+digit presses the game-controller keypad (game select on
-     * cartridges and tape games); released in keyReleaseEvent. */
-    if (event->modifiers().testFlag(Qt::ControlModifier) &&
-        event->key() >= Qt::Key_0 && event->key() <= Qt::Key_9) {
-        adamsession_joystick_raw(
-            m_session, 0,
-            adam_controller_encode(0, 0, 0, 0, 0, 0,
-                                   event->key() - Qt::Key_0));
-        event->accept();
-        return;
-    }
-
-    const int code = adamCodeForKey(event);
-    if (code >= 0) {
-        adamsession_key(m_session, (uint8_t)code);
+    if (adamForwardKey(m_session, event, true)) {
         event->accept();
         return;
     }
@@ -185,11 +142,16 @@ void DisplayWidget::keyPressEvent(QKeyEvent *event)
 
 void DisplayWidget::keyReleaseEvent(QKeyEvent *event)
 {
-    if (event->key() >= Qt::Key_0 && event->key() <= Qt::Key_9) {
-        adamsession_joystick_raw(
-            m_session, 0, adam_controller_encode(0, 0, 0, 0, 0, 0, -1));
+    if (adamForwardKey(m_session, event, false)) {
         event->accept();
         return;
     }
     QOpenGLWidget::keyReleaseEvent(event);
+}
+
+/* A key released while another window had focus never arrives here. */
+void DisplayWidget::focusOutEvent(QFocusEvent *event)
+{
+    adamsession_release_all(m_session);
+    QOpenGLWidget::focusOutEvent(event);
 }

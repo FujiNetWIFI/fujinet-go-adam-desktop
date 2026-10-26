@@ -24,6 +24,25 @@ typedef struct setting_kv {
     struct setting_kv *next;
 } setting_kv;
 
+/* One input source's hold on one controller port. The keyboard, the keypad
+ * window and each gamepad are separate sources so a release on one cannot
+ * cancel a press on another; input.c merges them into the controller word. */
+#define ADAM_SRC_PANEL    0
+#define ADAM_SRC_KEYBOARD 1
+#define ADAM_SRC_PAD      2 /* + pad slot */
+#define ADAM_MAX_PADS     4
+#define ADAM_SRC_COUNT    (ADAM_SRC_PAD + ADAM_MAX_PADS)
+#define ADAM_DIR_UP    1
+#define ADAM_DIR_DOWN  2
+#define ADAM_DIR_LEFT  4
+#define ADAM_DIR_RIGHT 8
+typedef struct {
+    uint8_t dirs;   /* ADAM_DIR_* */
+    uint8_t fires;  /* bit 0 Fire L, bit 1 Fire R */
+    uint16_t keys;  /* keypad keys held, bit per key */
+    int8_t klast;   /* the keypad key the word shows, -1 none */
+} adam_src_state;
+
 struct adamsession {
     /* ---- resolved paths ---- */
     char config_dir[ADAM_PATH_MAX];
@@ -31,6 +50,7 @@ struct adamsession {
     char cart_dir[ADAM_PATH_MAX];
     char settings_file[ADAM_PATH_MAX];
     char fujinet_lib[ADAM_PATH_MAX];  /* "" = unavailable/disabled */
+    int fujinet_lib_disabled;         /* the caller passed "": don't search */
     char fujinet_src[ADAM_PATH_MAX];  /* provisioning source override */
     char fujinet_root[ADAM_PATH_MAX];
     char fujinet_config[ADAM_PATH_MAX];
@@ -79,6 +99,12 @@ struct adamsession {
     adamdebug *debugger;
     volatile int dbg_engaged; /* emulator loop runs the stepped path */
 
+    /* ---- controllers (input.c) ---- */
+    pthread_mutex_t input_mtx;
+    adam_src_state src[2][ADAM_SRC_COUNT]; /* per port, per input source */
+    uint32_t held_keysym[ADAM_TARGET_COUNT]; /* UI thread only */
+    uint32_t chord_keysym[10];               /* Ctrl+digit chords, UI thread */
+
     char last_error[512];
 };
 
@@ -100,6 +126,18 @@ int  copy_file(const char *src, const char *dst);
 int  audio_start(adamsession *s);
 void audio_stop(adamsession *s);
 
+/* input.c */
+void input_init(adamsession *s);
+void input_release_everything(adamsession *s);
+/* Hold or release one per-port target (target < ADAM_TARGET_SYSACT(0)) for a
+ * source. */
+void input_apply(adamsession *s, int src, int target, int down);
+/* Replace a gamepad slot's whole hold: the port it drives and its state
+ * (the other port is cleared, so reassigning a pad cannot strand a hold). */
+void input_pad_set(adamsession *s, int slot, int port, int dirs, int fires,
+                   uint16_t keys);
+void input_pad_clear(adamsession *s, int slot);
+
 /* gamepad_sdl.c */
 int  gamepad_start(adamsession *s);
 void gamepad_stop(adamsession *s);
@@ -120,5 +158,11 @@ void adamdebug_resume_for_stop(adamdebug *d);
 void adamdebug_on_core_created(adamsession *s);
 /* adamcore's BoIP wire trace (adamcore_set_boip_trace); ud is the engine. */
 void adamdebug_boip_trace(void *ud, int dir, const uint8_t *buf, int len);
+/* The emulator thread is about to destroy its core: sets s->core = NULL
+ * under the engine's lock so a UI-thread debugger call is never mid-flight
+ * on it. */
+void adamdebug_clear_core(adamsession *s);
+/* Free the engine (adamsession_free, after the emulator thread has joined). */
+void adamdebug_destroy(adamdebug *d);
 
 #endif /* ADAMSESSION_INTERNAL_H */

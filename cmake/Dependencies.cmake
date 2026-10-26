@@ -18,7 +18,7 @@
 find_package(Git QUIET)
 
 # Pinned commits, kept in step with the submodule gitlinks (verified below).
-set(ADAMCORE_COMMIT "f19418fdbc32e9774df2eaf352398ee22e70f426")
+set(ADAMCORE_COMMIT "30155f49075deafcf35e6ed55e5663cf555eb1cd")
 set(ADAMCORE_URL "https://github.com/tschak909/adamcore")
 set(FUJINET_COMMIT "13465cdd044304ff96ad41a5f029087b28bed17f")
 set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")

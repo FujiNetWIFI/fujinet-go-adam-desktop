@@ -17,8 +17,11 @@ set_source_files_properties(${MACOS_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION "Re
 add_executable(fujinet-go-adam-macos MACOSX_BUNDLE
   main.m
   AppDelegate.m
+  AccentColor.m
   DisplayView.m
+  KeyForward.m
   debugger/DebuggerWindow.m
+  keypad/KeypadWindow.m
   ${MACOS_ICON}
 )
 set_target_properties(fujinet-go-adam-macos PROPERTIES

@@ -15,5 +15,6 @@
 #define IDM_DEBUGGER       209
 #define IDM_ABOUT          210
 #define IDM_EXIT           211
+#define IDM_KEYPAD         212
 
 #endif

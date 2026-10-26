@@ -25,6 +25,13 @@
 #include <QUrl>
 #endif
 
+QColor adamAccentColor()
+{
+    return QColor((ADAMSESSION_ACCENT_RGB >> 16) & 0xff,
+                  (ADAMSESSION_ACCENT_RGB >> 8) & 0xff,
+                  ADAMSESSION_ACCENT_RGB & 0xff);
+}
+
 void fujinet_config_show(QWidget *parent, adamsession *session)
 {
 #ifdef HAVE_WEBENGINE

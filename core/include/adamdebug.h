@@ -1,16 +1,35 @@
 /*
- * adamdebug -- the toolkit-agnostic debugger engine for FujiNet Go Adam
- * Desktop. Wraps adamcore's debug interface (adamcore_debug.h) with
- * pause/step/run-to execution control, breakpoint management, an
- * instruction-history ring, a Z80 disassembler, EOS/OS7 symbol tables, VDP
- * visualizer decoders, and a trace of the AdamNet packets to and from
- * FujiNet. One engine exists per session (adamsession_debugger()); native
- * GTK/Qt views sit on top.
+ * adamdebug -- the debugger contract: a Z80 debugger engine over adamcore
+ * (core/debugger/) behind a C API the native debugger windows share. Same
+ * shape as the SMS and MSX siblings' smsdebug.h / msxdebug.h, so the windows
+ * carry over; the engine is this repository's own, built on adamcore's
+ * debug interface (adamcore_debug.h): the instruction-stepped run loop, the
+ * PC breakpoint bitmap, the per-instruction exec hook and the bus hook.
  *
- * Threading: control calls (pause/resume/step/breakpoints) are safe from
- * the UI thread. The stop callback fires on the EMULATOR thread -- marshal
- * to the UI (g_idle_add / QMetaObject::invokeMethod). State reads are
- * consistent while paused.
+ * The engine only engages while a window holds it attached:
+ * adamdebug_attach() when the window opens -- which also stops the machine,
+ * as on every sibling -- and adamdebug_detach() when it closes, which takes
+ * every breakpoint, the exec hook and the bus hook out of the core and lets
+ * the machine run on at full speed on the plain frame path. Breakpoints are
+ * kept for the next attach. The FujiNet trace is the exception: it records
+ * from session start, so it shows what happened before anyone opened a
+ * window.
+ *
+ * Stopping parks the emulation thread between instructions; "stopped" means
+ * it is parked. Everything that changes the machine (registers, step, run)
+ * needs it stopped; reads are always allowed and answer with whatever is
+ * current while it runs. A window learns of stops, breakpoint hits and edits
+ * by polling adamdebug_generation() (every 100 ms is plenty); the optional
+ * stop callback fires on the emulator thread.
+ *
+ * Numbers in the console and in conditions: $C000, 0xC000, C000h (a name
+ * wins over a hex literal), 49152 (decimal), %1010.
+ *
+ * Calls are safe from the UI thread at any time, including while the session
+ * restarts (the engine, its breakpoints and its attach state survive a power
+ * cycle or media change; an attached engine stops the new machine at its
+ * first instruction). Reads of registers and memory while the machine runs
+ * are not synchronised with it: they answer with whatever is current.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -21,53 +40,160 @@
 
 #include <stdint.h>
 
-#include "adamcore_debug.h"
 #include "adamsession.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* The engine, lazily created by adamsession_debugger(s) (adamsession.h) and
+ * alive as long as the session object. */
+
+/* ---- attach / stop / go ---------------------------------------------------- */
+/* Engage the engine and stop at the next instruction. The emulation thread
+ * notices within a frame (<= ~17 ms); poll adamdebug_is_stopped() or the
+ * generation. Idempotent. Before the session has started it stops the
+ * machine as soon as it exists. Call it when the debugger window opens. */
+void adamdebug_attach(adamdebug *d);
+/* Disengage and let the machine run. Breakpoints are kept for the next
+ * attach. Returns once nothing is installed in the core any more (bounded
+ * wait). Call it when the debugger window closes. */
+void adamdebug_detach(adamdebug *d);
+int  adamdebug_is_attached(adamdebug *d);
+
+/* 1 once the emulation thread is parked. 0 while running, stepping, before
+ * the session starts, and right after resume/step/detach. */
+int  adamdebug_is_stopped(adamdebug *d);
+void adamdebug_stop(adamdebug *d);       /* break at the next instruction */
+void adamdebug_resume(adamdebug *d);     /* "run" */
+/* Why the machine last stopped ("stopped", "breakpoint: exec $8033",
+ * "write $6000 = $03", "read $6000 = $03", "out $FF <- $9F", "in $FC -> $1F",
+ * "step", "step over", "step out", "run to", "scanline", "frame") and the PC
+ * it stopped at; "running" and -1 while it runs. Returns the length. */
+int  adamdebug_stop_reason(adamdebug *d, char *dst, int dstsz, int *address);
+/* Bumped whenever the machine stopped or resumed, a command ran, a register,
+ * memory or label was edited, or the breakpoint list changed, so a window
+ * knows when to refresh. */
+unsigned adamdebug_generation(adamdebug *d);
+
+/* Optional push for tests: fires on the EMULATOR thread, with no engine lock
+ * held, each time the machine parks (after the state is visible to the
+ * calls above; it may call resume/step). Windows should poll the generation
+ * instead. */
 typedef enum {
-    ADAMDBG_STOP_PAUSE = 0,   /* explicit pause request */
-    ADAMDBG_STOP_BREAKPOINT,  /* PC breakpoint hit (before execution) */
-    ADAMDBG_STOP_STEP,        /* step into/over/out completed */
-    ADAMDBG_STOP_RUNTO,       /* run-to-address reached */
-} adamdebug_stop_reason;
-
-/* ---- execution control --------------------------------------------------- */
-void adamdebug_pause(adamdebug *d);   /* halts at the next instruction */
-void adamdebug_resume(adamdebug *d);
-int  adamdebug_is_paused(adamdebug *d);
-void adamdebug_step_into(adamdebug *d);           /* while paused */
-void adamdebug_step_over(adamdebug *d);           /* while paused */
-void adamdebug_step_out(adamdebug *d);            /* while paused */
-void adamdebug_run_to(adamdebug *d, uint16_t addr);
-
-/* Fires on the emulator thread whenever execution stops (and also after
- * each completed step). */
+    ADAMDBG_STOP_PAUSE = 0,   /* stop request, or attach */
+    ADAMDBG_STOP_BREAKPOINT,  /* an execute breakpoint (before it runs) */
+    ADAMDBG_STOP_WATCH,       /* a read/write/IN/OUT breakpoint (after the
+                                 accessing instruction) */
+    ADAMDBG_STOP_STEP,        /* step, over, out, scanline or frame done */
+    ADAMDBG_STOP_RUNTO        /* run-to address reached */
+} adamdebug_stop_kind;
 void adamdebug_set_stop_callback(adamdebug *d,
-                                 void (*cb)(void *ud,
-                                            adamdebug_stop_reason reason,
-                                            uint16_t pc),
+                                 void (*cb)(void *ud, int kind, uint16_t pc),
                                  void *ud);
 
-/* ---- breakpoints ---------------------------------------------------------- */
-void adamdebug_bp_toggle(adamdebug *d, uint16_t addr);
-void adamdebug_bp_set(adamdebug *d, uint16_t addr);
-void adamdebug_bp_clear(adamdebug *d, uint16_t addr);
-void adamdebug_bp_clear_all(adamdebug *d);
-int  adamdebug_bp_is_set(adamdebug *d, uint16_t addr);
-int  adamdebug_bp_list(adamdebug *d, uint16_t *out, int max);
+/* ---- the console ------------------------------------------------------------ */
+/* Run one command line. "help" lists them: step [n], over, out, run, stop,
+ * runto <addr>, scanline [n], frame [n], break <addr>[-<end>] [cond],
+ * bpr/bpw <addr>[-<end>] [cond], bpin/bpout <port>[-<end>] [cond],
+ * delete <id|addr>, enable/disable <id>, clear, breaks, print <expr>, regs,
+ * set <reg> <expr>, mem <addr> [len], poke <addr> <val...>, vram <addr>
+ * [len], vpoke <addr> <val...>, vdp, io (the memory map and ports), fujinet,
+ * label <addr> <name>, labels [file], disasm [addr] [n], trace
+ * [on|off|clear|n], save <kind> <file>. Expressions: numbers (see above),
+ * registers (a f b c d e h l af bc de hl ix iy sp pc i r im iff1 iff2, primed
+ * af' bc' de' hl'), flags (cf nf pf hf zf sf yf xf), [addr] byte and {addr}
+ * word reads, labels, line frame cycles, and in a breakpoint condition
+ * `value` and `addr` for the access; C operators with C precedence.
+ * The stepping commands wait up to a quarter second for the machine to stop
+ * again and then say where it is; run/go return at once.
+ * Output text into dst; returns its length. */
+int  adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz);
+/* Completions for the end of a line (commands, registers, labels, save
+ * kinds), one per line. Returns the count. */
+int  adamdebug_completions(adamdebug *d, const char *prefix, char *dst,
+                           int dstsz);
+/* Evaluate an expression (the grammar above, no `value`/`addr`): for an
+ * address field that should take labels and arithmetic. 0 and *value on
+ * success, -1 with the reason in err. */
+int  adamdebug_eval(adamdebug *d, const char *text, long *value, char *err,
+                    int errsz);
 
-/* ---- CPU / memory (consistent while paused) ------------------------------- */
-void adamdebug_get_regs(adamdebug *d, adamcore_z80_regs *out);
-void adamdebug_set_regs(adamdebug *d, const adamcore_z80_regs *in);
-int  adamdebug_read_mem(adamdebug *d, uint16_t addr, uint8_t *dst, int n);
-int  adamdebug_write_mem(adamdebug *d, uint16_t addr, const uint8_t *src,
-                         int n);
+/* ---- stepping shortcuts (the toolbar) -------------------------------------- */
+/* All need the machine stopped (they do nothing otherwise) and return at
+ * once; the machine runs and stops again, bumping the generation. The first
+ * instruction after a stop always runs, whatever sits at the PC. Breakpoints
+ * and watchpoints stop any of them early, with their own reason. */
+void adamdebug_step(adamdebug *d);        /* F7: one instruction */
+void adamdebug_step_over(adamdebug *d);   /* F8: over a CALL/RST/DJNZ/block
+                                             repeat/HALT; else one step */
+void adamdebug_step_out(adamdebug *d);    /* Shift+F8: to the RET (the return
+                                             address on the stack, with an SP
+                                             guard for recursion) */
+/* n scanlines (the beam line wraps 261 -> 0) / n frames: the end of the
+ * frame in progress is the first, so "frame" always lands on a frame
+ * boundary with the whole picture drawn. */
+void adamdebug_scanline(adamdebug *d, int n);
+void adamdebug_frame(adamdebug *d, int n);
+/* Run until PC == addr. */
+void adamdebug_run_to(adamdebug *d, uint16_t addr);
 
-/* ---- disassembly ---------------------------------------------------------- */
+/* ---- CPU --------------------------------------------------------------------- */
+typedef struct {
+    int pc, sp, af, bc, de, hl, ix, iy, wz;
+    int af2, bc2, de2, hl2;                /* the shadow set */
+    int i, r, im, iff1, iff2, halted;
+    int sf, zf, yf, hf, xf, pf, nf, cf;    /* the flags in F */
+    uint64_t cycles;                       /* T-states since power-on */
+    int line;                              /* beam scanline 0-261 of the frame in
+                                              progress (it can lag one line right
+                                              after the line's last instruction) */
+    uint32_t frame;                        /* frames completed since power-on */
+} adamdebug_cpu;
+void adamdebug_cpu_get(adamdebug *d, adamdebug_cpu *out);
+typedef enum {
+    ADAM_REG_PC = 0, ADAM_REG_SP, ADAM_REG_AF, ADAM_REG_BC, ADAM_REG_DE,
+    ADAM_REG_HL, ADAM_REG_IX, ADAM_REG_IY, ADAM_REG_AF2, ADAM_REG_BC2,
+    ADAM_REG_DE2, ADAM_REG_HL2, ADAM_REG_I, ADAM_REG_R, ADAM_REG_IM,
+    ADAM_REG_IFF1, ADAM_REG_IFF2,
+    ADAM_REG_A, ADAM_REG_F, ADAM_REG_B, ADAM_REG_C, ADAM_REG_D, ADAM_REG_E,
+    ADAM_REG_H, ADAM_REG_L,
+    ADAM_FLAG_S, ADAM_FLAG_Z, ADAM_FLAG_H, ADAM_FLAG_PV, ADAM_FLAG_N,
+    ADAM_FLAG_C,
+    ADAM_REG_COUNT
+} adamdebug_reg;
+/* Needs the machine stopped. Setting PC redirects the next instruction. */
+void adamdebug_cpu_set(adamdebug *d, int reg, int value);
+
+/* ---- memory ------------------------------------------------------------------- */
+/* CPU-bus reads through the live bank map, without side effects. Returns n
+ * (0 with the session not running). */
+int  adamdebug_read(adamdebug *d, uint16_t addr, uint8_t *dst, int n);
+/* A debugger edit through the same map: RAM takes it, ROM ignores it, and a
+ * cartridge bank register is not touched. */
+void adamdebug_write(adamdebug *d, uint16_t addr, uint8_t value);
+
+/* What is mapped where, from ports $7F (bank control) and $3F (net control).
+ * Lower 32K: bank 0 SmartWriter ROM (EOS ROM over $6000-$7FFF when
+ * eos_rom), 1 RAM, 2 expansion RAM, 3 OS7 ROM at $0000-$1FFF with RAM above
+ * (24K on an ADAM, a mirrored 1K at $6000 on a ColecoVision). Upper 32K:
+ * bank 0 RAM, 1 the empty expansion ROM socket, 2 expansion RAM,
+ * 3 the cartridge. */
+typedef struct {
+    uint8_t mem_ctrl, net_ctrl;
+    int lower, upper;        /* bank selects 0-3 (mem_ctrl D1-D0, D3-D2) */
+    const char *lower_name, *upper_name;
+    int eos_rom;             /* net_ctrl D1: EOS ROM visible at $6000-$7FFF in lower bank 0 */
+    int net_reset;           /* net_ctrl D0 */
+    int game_mode;           /* the last reset was a game (ColecoVision) reset */
+    int cv_console;          /* the session started as a bare ColecoVision */
+} adamdebug_memmap;
+void adamdebug_memmap_get(adamdebug *d, adamdebug_memmap *out);
+/* The memory map, the ports and the VDP registers as monospace text lines
+ * (the Memory Map & I/O tab; ~2K is plenty). Returns the length. */
+int  adamdebug_io_state(adamdebug *d, char *dst, int dstsz);
+
+/* ---- disassembly -------------------------------------------------------------- */
 #define ADAMDASM_JUMP     0x01
 #define ADAMDASM_CALL     0x02
 #define ADAMDASM_RET      0x04
@@ -77,43 +203,112 @@ int  adamdebug_write_mem(adamdebug *d, uint16_t addr, const uint8_t *src,
 #define ADAMDASM_HALT     0x40
 
 typedef struct {
-    uint16_t addr;
-    uint8_t len;      /* 1..4 */
-    uint8_t bytes[4];
-    char text[32];    /* "LD (IX+5),A" */
-    uint16_t target;  /* jump/call destination when flags say so */
-    uint8_t flags;    /* ADAMDASM_* */
-    const char *symbol; /* label at addr from the symbol tables, or NULL */
-} adamdasm_line;
+    uint16_t address;
+    int is_pc;
+    int has_breakpoint;      /* an execute breakpoint here, enabled or not */
+    int breakpoint_enabled;
+    int length;
+    char bytes[16];          /* "CD 50 80" */
+    char label[48];          /* the label at this address, or "" */
+    char disasm[64];         /* "CALL $8050" */
+    char comment[64];        /* a jump/call target's label, an IN/OUT port's name */
+    uint16_t target;         /* jump/call destination when flags say so */
+    uint8_t flags;           /* ADAMDASM_* */
+} adamdebug_line;
+/* Up to `max` lines starting at `addr`, through the current memory map.
+ * Returns the count; *pc_line is the index of the PC's line in `out`, -1
+ * when not among them (may be NULL). */
+int  adamdebug_disassemble(adamdebug *d, uint16_t addr, adamdebug_line *out,
+                           int max, int *pc_line);
+/* The address `rows` disassembly rows before (negative) or after `addr` --
+ * for scrolling, and for "Follow PC" (PC a third of the way down).
+ * Backwards is a best guess, as on every Z80 debugger. Clicks in the view
+ * should map through the lines' `address`, never through a row number. */
+int  adamdebug_row_address(adamdebug *d, uint16_t addr, int rows);
 
-/* Disassembles count instructions starting at addr (reading through the
- * current memory map, side-effect free). Returns lines written. */
-int adamdebug_disassemble(adamdebug *d, uint16_t addr, int count,
-                          adamdasm_line *out);
-
-/* ---- instruction history (trace ring) ------------------------------------- */
-typedef struct {
-    uint16_t pc, sp, af, bc, de, hl;
-    uint8_t len;
-    uint8_t bytes[4];
-    uint64_t cycles;
-} adamtrace_entry;
-
-void adamdebug_trace_enable(adamdebug *d, int enable);
-int  adamdebug_trace_enabled(adamdebug *d);
-/* Copies up to max entries, newest first. Returns entries written. */
-int  adamdebug_trace_read(adamdebug *d, adamtrace_entry *out, int max);
-void adamdebug_trace_clear(adamdebug *d);
-
-/* ---- symbols --------------------------------------------------------------
- * .sym format: "HHHH NAME [; comment]" per line, '#' comments. The built-in
- * EOS and OS7 tables (generated from the Drushel EOS-5 disassembly, the
- * eoslib jump-table names, and the os7lib listing) load automatically when
- * the engine is created. */
-int adamdebug_symbols_load(adamdebug *d, const char *path, const char *table);
+/* ---- symbols and labels -------------------------------------------------------
+ * .sym format: "HHHH NAME [; comment]" per line, '#' comments; also read:
+ * WLA-DX ("BB:AAAA name"), z88dk .map ("name = $AAAA ; ...") and SDCC .noi
+ * ("DEF name 0xAAAA"). The built-in EOS and OS7 tables (generated from the
+ * Drushel EOS-5 disassembly, the eoslib jump-table names and the os7lib
+ * listing) load when the engine is created. */
+/* Load a symbol file as table "file" (replacing the last one). With path
+ * NULL, <cartridge>.sym/.map/.noi next to the opened cartridge. Message into
+ * msg; returns labels loaded or -1. */
+int  adamdebug_load_symbols(adamdebug *d, const char *path, char *msg,
+                            int msgsz);
+/* Address of a label, or -1. Label at an address into dst (exact match;
+ * empty if none). A label set here goes into table "user". */
+int  adamdebug_label_address(adamdebug *d, const char *label);
+int  adamdebug_address_label(adamdebug *d, uint16_t addr, char *dst,
+                             int dstsz);
+/* Label addr (NULL or "" removes the user label there). Returns 0. */
+int  adamdebug_set_label(adamdebug *d, uint16_t addr, const char *label);
+/* Lower-level: load a file into a named table; the nearest label at or
+ * below addr with its offset; a name's address (1 found). */
+int  adamdebug_symbols_load(adamdebug *d, const char *path, const char *table);
 const char *adamdebug_symbol_at(adamdebug *d, uint16_t addr,
                                 uint16_t *offset);
-int adamdebug_symbol_find(adamdebug *d, const char *name, uint16_t *addr);
+int  adamdebug_symbol_find(adamdebug *d, const char *name, uint16_t *addr);
+
+/* ---- breakpoints -------------------------------------------------------------- */
+typedef enum {
+    ADAMDEBUG_BP_EXEC = 1, ADAMDEBUG_BP_READ = 2, ADAMDEBUG_BP_WRITE = 4,
+    ADAMDEBUG_BP_IN = 8, ADAMDEBUG_BP_OUT = 16
+} adamdebug_bp_type;
+typedef struct {
+    int id;                  /* never reused */
+    int type;                /* adamdebug_bp_type bits */
+    uint16_t start, end;     /* an address range, or a port range (0-255) for
+                                IN/OUT */
+    int enabled;
+    unsigned hits;           /* times it fired (its condition true) */
+    char condition[128];     /* an expression, "" for none */
+} adamdebug_breakpoint;
+/* READ ignores opcode and operand fetches. WRITE, READ, IN and OUT stop
+ * after the accessing instruction; EXEC stops before the instruction runs.
+ * A condition that fails to evaluate at run time stops rather than hides.
+ * Conditions see the registers as they are in the middle of the instruction
+ * for the access kinds. */
+/* Execute breakpoint at addr: added if absent, removed if present. Returns
+ * 1 when one is now set. */
+int  adamdebug_breakpoint_toggle(adamdebug *d, uint16_t addr);
+/* 1 when an execute breakpoint is at addr (enabled or not). */
+int  adamdebug_breakpoint_check(adamdebug *d, uint16_t addr);
+/* type: any combination of the bits (IN/OUT with ports only). Returns the
+ * new id, or -1 with the reason in err (a condition that does not parse or
+ * names something unknown, a port above 255, a full table). */
+int  adamdebug_breakpoint_add(adamdebug *d, int type, uint16_t start,
+                              uint16_t end, const char *condition, char *err,
+                              int errsz);
+void adamdebug_breakpoint_remove(adamdebug *d, int id);
+void adamdebug_breakpoint_enable(adamdebug *d, int id, int enabled);
+/* Copies up to max, in creation order. Returns the count. */
+int  adamdebug_breakpoint_list(adamdebug *d, adamdebug_breakpoint *out,
+                               int max);
+void adamdebug_breakpoint_clear(adamdebug *d);
+
+/* ---- the instruction trace ring ---------------------------------------------- */
+/* Records only while attached with tracing on (it needs the exec hook). */
+typedef struct {
+    uint16_t pc, sp, af, bc, de, hl;
+    uint8_t len, bytes[4];
+    uint64_t cycles;
+    int16_t line;
+} adamdebug_trace;
+void adamdebug_trace_enable(adamdebug *d, int on);
+int  adamdebug_trace_enabled(adamdebug *d);
+/* Newest first; returns entries copied. */
+int  adamdebug_trace_read(adamdebug *d, adamdebug_trace *out, int max);
+void adamdebug_trace_clear(adamdebug *d);
+
+/* ---- files -------------------------------------------------------------------- */
+/* Save with the path a native file picker supplied. kind: "dis" (the
+ * disassembly of $0000-$FFFF as mapped now), "mem" (the 64K the CPU sees),
+ * "vram" (the VDP's 16K), "regs" (CPU and VDP registers as text). Message
+ * into msg; returns 0 or -1. */
+int  adamdebug_save(adamdebug *d, const char *kind, const char *path,
+                    char *msg, int msgsz);
 
 /* ---- VDP ------------------------------------------------------------------ */
 typedef struct {
