@@ -197,8 +197,10 @@ private slots:
         QVERIFY(m_dir.isValid());
         qputenv("SDL_AUDIODRIVER", "dummy");
         if (qEnvironmentVariableIsSet("DBG_TEST_SHOTS")) m_shots = qEnvironmentVariable("DBG_TEST_SHOTS");
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
         if (qEnvironmentVariableIsSet("DBG_TEST_LIGHT"))
             QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
+#endif
         /* main.cpp's app-wide rule for toggled push buttons: the Run button
          * is one while the machine is stopped */
         const QColor accent = adamAccentColor();

@@ -13,6 +13,8 @@
 #if defined(_WIN32)
 #include <direct.h>
 #include <io.h>
+#else
+#include <unistd.h> /* mkdtemp, on macOS */
 #endif
 
 /* Creates a unique temp directory named "<prefix>XXXXXX" under the system
