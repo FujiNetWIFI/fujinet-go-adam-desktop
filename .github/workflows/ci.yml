@@ -427,7 +427,7 @@ jobs:
             build-aux/flatpak/${{ matrix.app-id }}.yml
       - name: Bundle
         run: |
-          flatpak build-bundle flatpak-repo ${{ matrix.bundle }} \
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo flatpak-repo ${{ matrix.bundle }} \
             ${{ matrix.app-id }} master
       - name: Upload bundle
         uses: actions/upload-artifact@v5
