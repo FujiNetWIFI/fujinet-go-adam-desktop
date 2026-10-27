@@ -2,10 +2,10 @@
 
 AppStream screenshots for the software-centre listings. These are referenced
 by **absolute URL** from the metainfo, not installed with the app, so an image
-only appears once it is committed *and pushed to `main`* -- the URL is what
+only appears once it is committed *and pushed (the URL names the release tag)* -- the URL is what
 GNOME Software and Flathub fetch.
 
-    https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/main/data/screenshots/<subdir>/<file>
+    https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/v<version>/data/screenshots/<subdir>/<file>
 
 ## Layout
 

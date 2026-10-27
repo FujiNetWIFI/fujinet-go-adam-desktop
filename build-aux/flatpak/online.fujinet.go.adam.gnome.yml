@@ -22,7 +22,7 @@
 
 app-id: online.fujinet.go.adam.gnome
 runtime: org.gnome.Platform
-runtime-version: '49'
+runtime-version: '51'
 sdk: org.gnome.Sdk
 command: fujinet-go-adam-gnome
 

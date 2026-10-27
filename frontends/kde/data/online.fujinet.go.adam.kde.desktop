@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=FujiNet Go Adam
+Name=FujiNet Go Adam (KDE)
 GenericName=Coleco ADAM with FujiNet
 Comment=Self-contained Coleco ADAM computer with built-in FujiNet
 Exec=fujinet-go-adam-kde

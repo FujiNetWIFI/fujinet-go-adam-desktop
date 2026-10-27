@@ -401,7 +401,7 @@ jobs:
         include:
           - frontend: gnome
             app-id: online.fujinet.go.adam.gnome
-            runtime: org.gnome.Platform//49 org.gnome.Sdk//49
+            runtime: org.gnome.Platform//51 org.gnome.Sdk//51
             bundle: FujiNet-Go-Adam-gnome.flatpak
           - frontend: kde
             app-id: online.fujinet.go.adam.kde
@@ -410,7 +410,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       # Driven directly rather than through the usual community container
-      # image: its tags stop at gnome-47, and these manifests target GNOME 49
+      # image: its tags stop at gnome-47, and these manifests target GNOME 51
       # and KDE 6.11.
       - name: Install flatpak and the ${{ matrix.frontend }} runtime
         run: |
