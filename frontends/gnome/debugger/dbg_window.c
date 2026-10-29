@@ -611,11 +611,14 @@ static void refresh_fujinet(DbgWin *w, gboolean force)
     GString *t;
     int n = adamdebug_fujinet_trace(w->dbg, p, TRACE_MAX), i;
 
-    if (!adamsession_fujinet_running(w->session))
+    if (!adamsession_fujinet_running(w->session) &&
+        !adamsession_fujinet_external(w->session))
         g_strlcpy(note, "FujiNet is not running (FujiNet \xe2\x96\xb8 FujiNet Console Log).",
                   sizeof note);
     else
-        g_snprintf(note, sizeof note, "FujiNet is on BoIP port %d, %s.", ADAMSESSION_BOIP_PORT,
+        g_snprintf(note, sizeof note, "%s FujiNet on BoIP %s, %s.",
+                   adamsession_fujinet_external(w->session) ? "External" : "Built-in",
+                   adamsession_boip_endpoint(w->session),
                    adamsession_fujinet_link(w->session) ? "connected" : "not connected");
     gtk_label_set_text(w->fuji_note, note);
     adamdebug_fujinet_state(w->dbg, state, (int)sizeof state);

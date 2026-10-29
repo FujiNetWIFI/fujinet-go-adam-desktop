@@ -93,6 +93,10 @@ struct adamsession {
     /* ---- FujiNet runtime (fujinet_runtime.c) ---- */
     int fujinet_loaded;  /* dlopen'd (kept for process lifetime) */
     int fujinet_running;
+    int fujinet_external;      /* listening for a FujiNet that isn't ours */
+    char boip_host[64];        /* where the BoIP listener binds */
+    int boip_port;
+    char boip_endpoint[80];    /* "host:port" for display */
     volatile int fujinet_link; /* BoIP client connected (emulator thread) */
 
     /* ---- debugger ---- */

@@ -138,9 +138,12 @@ static void *emu_thread_main(void *arg)
     cfg.cart_path = s->cart_path[0] ? s->cart_path : NULL;
     cfg.start_machine = s->opts.machine ? ADAMCORE_MACHINE_CV
                                         : ADAMCORE_MACHINE_ADAM;
-    cfg.boip_listen_port =
-        (s->opts.enable_fujinet && s->fujinet_running) ? ADAMSESSION_BOIP_PORT
-                                                       : 0;
+    if (s->fujinet_external) {
+        cfg.boip_listen_addr = s->boip_host;
+        cfg.boip_listen_port = s->boip_port;
+    } else if (s->opts.enable_fujinet && s->fujinet_running) {
+        cfg.boip_listen_port = ADAMSESSION_BOIP_PORT;
+    }
     cfg.palette = s->opts.palette;
     cfg.expansion = s->opts.expansion;
     cfg.joystick_mode = s->opts.joystick_mode;
@@ -150,8 +153,11 @@ static void *emu_thread_main(void *arg)
 
     core = adamcore_create(&cfg);
     if (!core) {
-        session_set_error(s, "adamcore_create failed (ROM paths? BoIP port "
-                          "%d in use?)", cfg.boip_listen_port);
+        session_set_error(s, "adamcore_create failed (BoIP %s:%d: bad "
+                          "address or port in use?)",
+                          cfg.boip_listen_addr ? cfg.boip_listen_addr
+                                               : "127.0.0.1",
+                          cfg.boip_listen_port);
         s->running = 0;
         return NULL;
     }
@@ -270,9 +276,70 @@ void adamsession_default_opts(adamsession *s, adamsession_start_opts *opts)
     opts->joystick_mode = adamsession_get_int(s, "joystick_mode", 1);
     opts->swap_buttons = adamsession_get_int(s, "swap_buttons", 0);
     opts->reverse_keypad = adamsession_get_int(s, "reverse_keypad", 0);
+    opts->external_fujinet = adamsession_get_int(s, "fujinet_external", 0);
+    opts->boip_listen = adamsession_get_str(s, "fujinet_external_addr", NULL);
     opts->enable_fujinet = 1;
     opts->enable_audio = 1;
     opts->enable_gamepad = 1;
+}
+
+int adamsession_parse_hostport(const char *text, char *host, int hostsz,
+                               int *port)
+{
+    char buf[80], *colon, *end;
+    const char *h = "127.0.0.1";
+    long p = ADAMSESSION_BOIP_PORT;
+    size_t n;
+
+    if (!text) text = "";
+    while (*text == ' ' || *text == '\t') text++;
+    n = strlen(text);
+    while (n && (text[n - 1] == ' ' || text[n - 1] == '\t' ||
+                 text[n - 1] == '\n' || text[n - 1] == '\r'))
+        n--;
+    if (n >= sizeof(buf)) return -1;
+    memcpy(buf, text, n);
+    buf[n] = '\0';
+
+    if (n) {
+        colon = strrchr(buf, ':');
+        if (colon) {
+            *colon = '\0';
+            h = buf;
+            if (!*h) return -1;
+            text = colon + 1;
+        } else {
+            text = buf;
+        }
+        if (!*text) return -1;
+        p = strtol(text, &end, 10);
+        if (*end || p < 1 || p > 65535) return -1;
+        if (colon) {
+            /* An IPv4 literal (or "localhost"). */
+            int o[4], used = 0, k;
+            if (strcmp(h, "localhost") != 0) {
+                if (sscanf(h, "%d.%d.%d.%d%n", &o[0], &o[1], &o[2], &o[3],
+                           &used) != 4 || h[used])
+                    return -1;
+                for (k = 0; k < 4; k++)
+                    if (o[k] < 0 || o[k] > 255) return -1;
+            }
+        }
+    }
+    if ((int)strlen(h) >= hostsz) return -1;
+    memcpy(host, h, strlen(h) + 1);
+    *port = (int)p;
+    return 0;
+}
+
+int adamsession_fujinet_external(const adamsession *s)
+{
+    return s->fujinet_external;
+}
+
+const char *adamsession_boip_endpoint(const adamsession *s)
+{
+    return s->boip_endpoint[0] ? s->boip_endpoint : "127.0.0.1:65216";
 }
 
 int adamsession_start(adamsession *s, const adamsession_start_opts *opts)
@@ -301,8 +368,26 @@ int adamsession_start(adamsession *s, const adamsession_start_opts *opts)
     /* FujiNet first; its BoIP client retries connecting to the core's
      * listener, so ordering is forgiving. A missing runtime is not fatal:
      * the machine still boots, just without the FujiNet drive. */
-    if (opts->enable_fujinet)
+    s->fujinet_external = 0;
+    snprintf(s->boip_endpoint, sizeof(s->boip_endpoint), "127.0.0.1:%d",
+             ADAMSESSION_BOIP_PORT);
+    if (opts->external_fujinet) {
+        if (adamsession_parse_hostport(opts->boip_listen, s->boip_host,
+                                       sizeof(s->boip_host),
+                                       &s->boip_port) != 0) {
+            session_set_error(s, "\"%s\" is not an address:port for the "
+                              "external FujiNet (example: 0.0.0.0:65216)",
+                              opts->boip_listen ? opts->boip_listen : "");
+            pthread_mutex_unlock(&s->lifecycle_mtx);
+            return -1;
+        }
+        s->fujinet_external = 1;
+        s->webui_url[0] = '\0';
+        snprintf(s->boip_endpoint, sizeof(s->boip_endpoint), "%s:%d",
+                 s->boip_host, s->boip_port);
+    } else if (opts->enable_fujinet) {
         fujinet_start(s);
+    }
 
     s->stop_flag = 0;
     s->frame_serial = 0;
@@ -348,6 +433,7 @@ void adamsession_stop(adamsession *s)
     gamepad_stop(s);
     input_release_everything(s);
     fujinet_stop(s);
+    s->fujinet_external = 0;
     s->running = 0;
     pthread_mutex_unlock(&s->lifecycle_mtx);
 }

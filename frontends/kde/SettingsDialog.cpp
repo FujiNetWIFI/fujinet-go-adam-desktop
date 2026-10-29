@@ -15,6 +15,9 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMessageBox>
 #include <QVBoxLayout>
 
 SettingsDialog::SettingsDialog(adamsession *session, QWidget *parent)
@@ -54,6 +57,29 @@ SettingsDialog::SettingsDialog(adamsession *session, QWidget *parent)
     m_reverseKeypad = addCheck(machineForm, QStringLiteral("Reverse keypad"),
                                "reverse_keypad", 0);
 
+    auto *fujinetBox = new QGroupBox(QStringLiteral("FujiNet"), this);
+    auto *fujinetForm = new QFormLayout(fujinetBox);
+    m_external = addCheck(fujinetForm, QStringLiteral("Use external FujiNet"),
+                          "fujinet_external", 0);
+    m_externalAddr = new QLineEdit(
+        QString::fromUtf8(adamsession_get_str(session, "fujinet_external_addr",
+                                              "")),
+        this);
+    m_externalAddr->setPlaceholderText(QStringLiteral("0.0.0.0:65216"));
+    m_externalAddr->setEnabled(m_external->isChecked());
+    connect(m_external, &QCheckBox::toggled, m_externalAddr,
+            &QWidget::setEnabled);
+    fujinetForm->addRow(QStringLiteral("Listen address:port"),
+                        m_externalAddr);
+    auto *hint = new QLabel(
+        QStringLiteral("Skips the built-in FujiNet. Point the other "
+                       "instance's [BOIP] host and port here. 0.0.0.0 accepts "
+                       "connections from the network; 127.0.0.1 only from "
+                       "this computer."),
+        this);
+    hint->setWordWrap(true);
+    fujinetForm->addRow(hint);
+
     auto *displayBox = new QGroupBox(QStringLiteral("Display"), this);
     auto *displayForm = new QFormLayout(displayBox);
     m_aspect = addCombo(displayForm, QStringLiteral("Aspect ratio"),
@@ -73,6 +99,7 @@ SettingsDialog::SettingsDialog(adamsession *session, QWidget *parent)
 
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(machineBox);
+    layout->addWidget(fujinetBox);
     layout->addWidget(displayBox);
     layout->addWidget(buttons);
 }
@@ -107,6 +134,22 @@ bool SettingsDialog::saveValue(const char *key, int def, int value)
 
 void SettingsDialog::accept()
 {
+    const QByteArray addr = m_externalAddr->text().trimmed().toUtf8();
+    if (m_external->isChecked()) {
+        char host[64];
+        int port;
+        if (adamsession_parse_hostport(addr.constData(), host, sizeof host,
+                                       &port) != 0) {
+            QMessageBox::warning(
+                this, QStringLiteral("External FujiNet"),
+                QStringLiteral("\"%1\" is not an address:port. Example: "
+                               "0.0.0.0:65216")
+                    .arg(m_externalAddr->text()));
+            m_externalAddr->setFocus();
+            return;
+        }
+    }
+
     m_machineDirty |= saveValue("machine", 0, m_machine->currentIndex());
     m_machineDirty |= saveValue("palette", 0, m_palette->currentIndex());
     m_machineDirty |= saveValue("expansion", 0, m_expansion->currentIndex());
@@ -116,6 +159,16 @@ void SettingsDialog::accept()
         saveValue("swap_buttons", 0, m_swapButtons->isChecked() ? 1 : 0);
     m_machineDirty |=
         saveValue("reverse_keypad", 0, m_reverseKeypad->isChecked() ? 1 : 0);
+
+    m_machineDirty |=
+        saveValue("fujinet_external", 0, m_external->isChecked() ? 1 : 0);
+    if (QString::fromUtf8(adamsession_get_str(m_session,
+                                              "fujinet_external_addr", "")) !=
+        QString::fromUtf8(addr)) {
+        adamsession_set_str(m_session, "fujinet_external_addr",
+                            addr.constData());
+        m_machineDirty = true;
+    }
 
     saveValue("aspect_mode", 0, m_aspect->currentIndex());
     saveValue("smooth_scaling", 0, m_smooth->isChecked() ? 1 : 0);

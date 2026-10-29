@@ -45,6 +45,10 @@ platforms are very welcome.
   fire, left stick or d-pad steer; the other buttons can be mapped).
 - Import `.dsk`/`.ddp` images into the FujiNet SD folder; load `.rom`/
   `.col`/`.bin` cartridges (boots in ColecoVision mode).
+- External FujiNet: a switch in the settings (Windows: `FujiNet ▸ Connection`)
+  skips the built-in FujiNet and listens on an address:port you enter, e.g.
+  `0.0.0.0:65216`; point the other instance's `[BOIP]` host and port at it.
+- The main window remembers its size.
 - Shared settings: palette, expansion module, joystick mode, aspect mode…
   are stored once (`~/.config/fujinet-go-adam/settings.ini`) and shared by
   every frontend — GNOME preferences, the Qt settings dialog and the macOS

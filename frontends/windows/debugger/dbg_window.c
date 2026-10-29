@@ -859,10 +859,12 @@ static void refresh_fujinet(debugger *d, int force)
     size_t len = 0;
     int n = adamdebug_fujinet_trace(d->dbg, p, TRACE_MAX), i, follow;
 
-    if (!adamsession_fujinet_running(d->session))
+    if (!adamsession_fujinet_running(d->session) && !adamsession_fujinet_external(d->session))
         snprintf(note, sizeof note, "FujiNet is not running (FujiNet > Console Log).");
     else
-        snprintf(note, sizeof note, "FujiNet is on BoIP port %d, %s.", ADAMSESSION_BOIP_PORT,
+        snprintf(note, sizeof note, "%s FujiNet on BoIP %s, %s.",
+                 adamsession_fujinet_external(d->session) ? "External" : "Built-in",
+                 adamsession_boip_endpoint(d->session),
                  adamsession_fujinet_link(d->session) ? "connected" : "not connected");
     set_label(d->fuji_note, note);
     state[0] = '\0';

@@ -30,7 +30,13 @@ MainWindow::MainWindow(adamsession *session, QWidget *parent)
     : QMainWindow(parent), m_session(session)
 {
     setWindowTitle(QStringLiteral("FujiNet Go Adam"));
-    resize(1088, 950);
+    {
+        const int w = adamsession_get_int(session, "window_width", 1088);
+        const int h = adamsession_get_int(session, "window_height", 950);
+        resize(w >= 200 && h >= 200 ? QSize(w, h) : QSize(1088, 950));
+        if (adamsession_get_int(session, "window_maximized", 0))
+            setWindowState(windowState() | Qt::WindowMaximized);
+    }
 
     m_display = new DisplayWidget(session, this);
     setCentralWidget(m_display);
@@ -211,13 +217,37 @@ void MainWindow::showPreferences()
     }
 }
 
+/* The window's size and whether it was maximized, for the next start. A
+ * maximized or fullscreen window keeps the size it had before. */
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    const bool maximized = isMaximized();
+    if (!maximized && !isFullScreen() && width() >= 200 && height() >= 200) {
+        adamsession_set_int(m_session, "window_width", width());
+        adamsession_set_int(m_session, "window_height", height());
+    }
+    adamsession_set_int(m_session, "window_maximized", maximized ? 1 : 0);
+    adamsession_settings_flush(m_session);
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::showFujiNetConfig()
 {
+    if (adamsession_fujinet_external(m_session)) {
+        statusBar()->showMessage(
+            QStringLiteral("FujiNet is external: use its own web UI"), 5000);
+        return;
+    }
     fujinet_config_show(this, m_session);
 }
 
 void MainWindow::showFujiNetLog()
 {
+    if (adamsession_fujinet_external(m_session)) {
+        statusBar()->showMessage(
+            QStringLiteral("FujiNet is external: see its own console"), 5000);
+        return;
+    }
     fujinet_log_show(this, m_session);
 }
 

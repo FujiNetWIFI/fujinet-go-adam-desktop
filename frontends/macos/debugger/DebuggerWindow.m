@@ -1577,10 +1577,12 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     int n = adamdebug_fujinet_trace(_dbg, p, TRACE_MAX);
     if (n < 0) n = 0;
 
-    if (!adamsession_fujinet_running(_session))
+    if (!adamsession_fujinet_running(_session) && !adamsession_fujinet_external(_session))
         _fujiNote.stringValue = @"FujiNet is not running (FujiNet ▸ Console Log).";
     else
-        _fujiNote.stringValue = [NSString stringWithFormat:@"FujiNet is on BoIP port %d, %@.", ADAMSESSION_BOIP_PORT,
+        _fujiNote.stringValue = [NSString stringWithFormat:@"%@ FujiNet on BoIP %s, %@.",
+                                 adamsession_fujinet_external(_session) ? @"External" : @"Built-in",
+                                 adamsession_boip_endpoint(_session),
                                  adamsession_fujinet_link(_session) ? @"connected" : @"not connected"];
     state[0] = '\0';
     adamdebug_fujinet_state(_dbg, state, (int)sizeof(state));

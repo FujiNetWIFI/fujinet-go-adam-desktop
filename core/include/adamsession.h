@@ -83,6 +83,10 @@ typedef struct {
     int swap_buttons;       /* 0/1 */
     int reverse_keypad;     /* 0/1 */
     int enable_fujinet;     /* start the in-process FujiNet runtime */
+    int external_fujinet;   /* 1: don't start it; listen for another FujiNet
+                             * instance on boip_listen instead */
+    const char *boip_listen; /* "host:port" or "port" the BoIP listener binds
+                              * (external only); NULL/"" = 127.0.0.1:65216 */
     int enable_audio;       /* open the SDL audio device */
     int enable_gamepad;     /* start the SDL gamepad thread */
 } adamsession_start_opts;
@@ -283,7 +287,18 @@ uint16_t adamsession_gamepad_last_state(adamsession *s, int port);
 int  adamsession_render_audio(adamsession *s, int16_t *out, int nsamples);
 
 /* ---- FujiNet -------------------------------------------------------------*/
+/* Parses the "Use external FujiNet" address field: "host:port" (host an IPv4
+ * literal or "localhost") or a bare "port". Empty text means the default,
+ * 127.0.0.1:65216. Returns 0 and fills host/port, or -1 when the text is not
+ * an address:port (nothing is written then). */
+int         adamsession_parse_hostport(const char *text, char *host,
+                                       int hostsz, int *port);
 int         adamsession_fujinet_running(const adamsession *s);
+/* 1 when the session was started to listen for an external FujiNet. */
+int         adamsession_fujinet_external(const adamsession *s);
+/* "host:port" the BoIP listener is bound to (the running session's, or the
+ * default 127.0.0.1:65216 before the first start). */
+const char *adamsession_boip_endpoint(const adamsession *s);
 /* 1 while FujiNet is connected to the core's BoIP listener (updated each
  * emulated frame). */
 int         adamsession_fujinet_link(const adamsession *s);

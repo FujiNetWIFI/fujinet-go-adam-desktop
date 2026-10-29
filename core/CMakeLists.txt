@@ -108,6 +108,9 @@ add_executable(bindings_test tests/bindings_test.c)
 target_link_libraries(bindings_test adamsession)
 target_include_directories(bindings_test PRIVATE src)
 
+add_executable(hostport_test tests/hostport_test.c)
+target_link_libraries(hostport_test adamsession)
+
 add_executable(boot_smoke tests/boot_smoke.c)
 target_link_libraries(boot_smoke adamsession)
 target_include_directories(boot_smoke PRIVATE src)
@@ -137,6 +140,7 @@ target_include_directories(fujitrace_test PRIVATE debugger)
 
 add_test(NAME input COMMAND input_test)
 add_test(NAME bindings COMMAND bindings_test)
+add_test(NAME hostport COMMAND hostport_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME debug_boot COMMAND debug_boot_test)
@@ -152,7 +156,8 @@ set_tests_properties(boot_smoke debug_boot gamepad_map
 # on a bare Windows box, or under wine when cross-compiling.
 if(WIN32)
   foreach(_t input_test boot_smoke dasm_test debug_boot_test
-             gamepad_probe gamepad_map_test vdp_decode_test fujitrace_test)
+             gamepad_probe gamepad_map_test vdp_decode_test fujitrace_test
+             hostport_test)
     target_link_options(${_t} PRIVATE -static -static-libgcc -static-libstdc++)
   endforeach()
 endif()

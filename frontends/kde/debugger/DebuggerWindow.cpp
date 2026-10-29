@@ -1019,11 +1019,13 @@ void DebuggerWindow::refreshFujinet(bool force)
     static adam_fuji_packet p[TRACE_MAX];
     static char state[4096];
     const int n = adamdebug_fujinet_trace(m_dbg, p, TRACE_MAX);
-    if (!adamsession_fujinet_running(m_session))
+    if (!adamsession_fujinet_running(m_session) && !adamsession_fujinet_external(m_session))
         m_fujiNote->setText(QStringLiteral("FujiNet is not running (FujiNet ▸ Console Log)."));
     else
-        m_fujiNote->setText(QStringLiteral("FujiNet is on BoIP port %1, %2.")
-                                .arg(ADAMSESSION_BOIP_PORT)
+        m_fujiNote->setText(QStringLiteral("%1 FujiNet on BoIP %2, %3.")
+                                .arg(adamsession_fujinet_external(m_session) ? QStringLiteral("External")
+                                                                             : QStringLiteral("Built-in"))
+                                .arg(QString::fromUtf8(adamsession_boip_endpoint(m_session)))
                                 .arg(adamsession_fujinet_link(m_session) ? QStringLiteral("connected")
                                                                          : QStringLiteral("not connected")));
     state[0] = '\0';

@@ -16,5 +16,6 @@
 #define IDM_ABOUT          210
 #define IDM_EXIT           211
 #define IDM_KEYPAD         212
+#define IDM_FUJINET_CONN   213
 
 #endif

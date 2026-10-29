@@ -44,6 +44,19 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.11.0" date="2026-10-29">
+      <description>
+        <p>
+          New: use an external FujiNet. A switch in the settings skips the built-in FujiNet and listens on an address:port you choose (for example 0.0.0.0:65216), so another FujiNet instance can connect to it by setting its [BOIP] host and port. The Windows build has it under FujiNet ▸ Connection.
+        </p>
+        <p>
+          New: the main window remembers its size and whether it was maximized.
+        </p>
+        <p>
+          The built-in FujiNet is updated to the latest fujinet-firmware master.
+        </p>
+      </description>
+    </release>
     <release version="0.10.3" date="2026-10-29">
       <description>
         <p>

@@ -11,6 +11,7 @@
 
 class QComboBox;
 class QCheckBox;
+class QLineEdit;
 
 class SettingsDialog : public QDialog {
     Q_OBJECT
@@ -35,4 +36,6 @@ private:
 
     QComboBox *m_machine, *m_palette, *m_expansion, *m_joystick, *m_aspect;
     QCheckBox *m_swapButtons, *m_reverseKeypad, *m_smooth;
+    QCheckBox *m_external;
+    QLineEdit *m_externalAddr;
 };

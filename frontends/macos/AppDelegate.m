@@ -42,7 +42,8 @@ static NSArray<NSString *> *machineSettingKeys(void)
     dispatch_once(&once, ^{
       keys = @[
           @"machine", @"palette", @"expansion", @"joystick_mode",
-          @"swap_buttons", @"reverse_keypad"
+          @"swap_buttons", @"reverse_keypad", @"fujinet_external",
+          @"fujinet_external_addr"
       ];
     });
     return keys;
@@ -60,6 +61,7 @@ static NSArray<NSString *> *machineSettingKeys(void)
     NSTextView *_logView;
     NSTimer *_logTimer;
     NSWindow *_settingsWindow;
+    NSTextField *_externalField;
     BOOL _machineDirty;
 }
 
@@ -147,6 +149,14 @@ static NSArray<NSString *> *machineSettingKeys(void)
 - (void)showFujiNetConfig:(id)sender
 {
     (void)sender;
+    if (adamsession_fujinet_external(_session)) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"FujiNet is external";
+        alert.informativeText = @"Use the web UI of the FujiNet instance "
+                                @"that connects to this app.";
+        [alert runModal];
+        return;
+    }
     if (_configWindow) {
         [_configWindow makeKeyAndOrderFront:nil];
         return;
@@ -197,6 +207,14 @@ static NSArray<NSString *> *machineSettingKeys(void)
 - (void)showFujiNetLog:(id)sender
 {
     (void)sender;
+    if (adamsession_fujinet_external(_session)) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"FujiNet is external";
+        alert.informativeText = @"Its console output is in the process "
+                                @"that is running it.";
+        [alert runModal];
+        return;
+    }
     if (_logWindow) {
         [_logWindow makeKeyAndOrderFront:nil];
         return;
@@ -316,10 +334,32 @@ static NSArray<NSString *> *machineSettingKeys(void)
 
     adamsession_set_int(_session, key.UTF8String, value);
 
+    if ([key isEqualToString:@"fujinet_external"])
+        _externalField.enabled = value != 0;
     if ([machineSettingKeys() containsObject:key])
         _machineDirty = YES;
     else
         [self applyDisplaySettings];
+}
+
+/* The external-FujiNet address field: valid text (or none, meaning
+ * 127.0.0.1:65216) is saved; anything else is shown in red and not saved. */
+- (void)externalAddrChanged:(id)sender
+{
+    NSTextField *field = sender;
+    NSString *text = [field.stringValue
+        stringByTrimmingCharactersInSet:NSCharacterSet
+                                            .whitespaceAndNewlineCharacterSet];
+    char host[64];
+    int port;
+    if (adamsession_parse_hostport(text.UTF8String, host, sizeof host,
+                                   &port) != 0) {
+        field.textColor = NSColor.systemRedColor;
+        return;
+    }
+    field.textColor = NSColor.controlTextColor;
+    adamsession_set_str(_session, "fujinet_external_addr", text.UTF8String);
+    _machineDirty = YES;
 }
 
 - (void)showSettings:(id)sender
@@ -329,6 +369,16 @@ static NSArray<NSString *> *machineSettingKeys(void)
         [_settingsWindow makeKeyAndOrderFront:nil];
         return;
     }
+
+    _externalField = [NSTextField textFieldWithString:@(
+        adamsession_get_str(_session, "fujinet_external_addr", ""))];
+    _externalField.placeholderString = @"0.0.0.0:65216";
+    _externalField.preferredMaxLayoutWidth = 240;
+    _externalField.enabled =
+        adamsession_get_int(_session, "fujinet_external", 0) != 0;
+    _externalField.target = self;
+    _externalField.action = @selector(externalAddrChanged:);
+    [_externalField.cell setSendsActionOnEndEditing:YES];
 
     NSArray<NSArray<NSView *> *> *rows = @[
         @[ [self sectionLabel:@"Machine"], [NSTextField labelWithString:@""] ],
@@ -378,6 +428,15 @@ static NSArray<NSString *> *machineSettingKeys(void)
             [NSTextField labelWithString:@"Reverse keypad"],
             [self checkBoxForKey:"reverse_keypad" fallback:0]
         ],
+        @[ [self sectionLabel:@"FujiNet"], [NSTextField labelWithString:@""] ],
+        @[
+            [NSTextField labelWithString:@"Use external FujiNet"],
+            [self checkBoxForKey:"fujinet_external" fallback:0]
+        ],
+        @[
+            [NSTextField labelWithString:@"Listen address:port"],
+            _externalField
+        ],
         @[ [self sectionLabel:@"Display"], [NSTextField labelWithString:@""] ],
         @[
             [NSTextField labelWithString:@"Aspect ratio"],
@@ -401,7 +460,9 @@ static NSArray<NSString *> *machineSettingKeys(void)
 
     NSTextField *note = [NSTextField
         labelWithString:@"Display options apply immediately. Machine options "
-                        @"take effect when this window is closed."];
+                        @"take effect when this window is closed.\nAn "
+                        @"external FujiNet connects to the address above: "
+                        @"set its [BOIP] host and port to match."];
     note.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
     note.textColor = NSColor.secondaryLabelColor;
 
@@ -430,6 +491,10 @@ static NSArray<NSString *> *machineSettingKeys(void)
  * restart when it closes. */
 - (void)windowWillClose:(NSNotification *)note
 {
+    if (note.object == _window)
+        [self saveWindowSize];
+    if (note.object == _settingsWindow)
+        [_settingsWindow makeFirstResponder:nil]; /* commit a field edit */
     if (note.object != _settingsWindow || !_machineDirty)
         return;
     _machineDirty = NO;
@@ -596,6 +661,12 @@ static NSArray<NSString *> *machineSettingKeys(void)
     [self buildMenus];
 
     NSRect frame = NSMakeRect(0, 0, 1088, 902);
+    {
+        const int w = adamsession_get_int(_session, "window_width", 1088);
+        const int h = adamsession_get_int(_session, "window_height", 902);
+        if (w >= 200 && h >= 200)
+            frame = NSMakeRect(0, 0, w, h);
+    }
     _window = [[NSWindow alloc]
         initWithContentRect:frame
                   styleMask:NSWindowStyleMaskTitled |
@@ -627,9 +698,23 @@ static NSArray<NSString *> *machineSettingKeys(void)
         [ADAMKeypadWindow toggleWithSession:_session];
 }
 
+/* The window's content size for the next start (not while fullscreen). */
+- (void)saveWindowSize
+{
+    if (!_window || (_window.styleMask & NSWindowStyleMaskFullScreen))
+        return;
+    NSSize size = ((NSView *)_window.contentView).bounds.size;
+    if (size.width < 200 || size.height < 200)
+        return;
+    adamsession_set_int(_session, "window_width", (int)size.width);
+    adamsession_set_int(_session, "window_height", (int)size.height);
+    adamsession_settings_flush(_session);
+}
+
 - (void)applicationWillTerminate:(NSNotification *)note
 {
     (void)note;
+    [self saveWindowSize];
     [_logTimer invalidate];
     [_display stop];
     adamsession_stop(_session);

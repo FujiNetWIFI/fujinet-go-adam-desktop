@@ -331,6 +331,10 @@ static void action_fujinet_config(GSimpleAction *action, GVariant *param,
     AdamWindow *self = ADAM_WINDOW(user_data);
     (void)action;
     (void)param;
+    if (adamsession_fujinet_external(self->session)) {
+        adam_window_toast(self, "FujiNet is external: use its own web UI");
+        return;
+    }
     adam_fujinet_config_show(GTK_WINDOW(self), self->session);
 }
 
@@ -340,6 +344,10 @@ static void action_fujinet_log(GSimpleAction *action, GVariant *param,
     AdamWindow *self = ADAM_WINDOW(user_data);
     (void)action;
     (void)param;
+    if (adamsession_fujinet_external(self->session)) {
+        adam_window_toast(self, "FujiNet is external: see its own console");
+        return;
+    }
     adam_fujinet_log_show(GTK_WINDOW(self), self->session);
 }
 
@@ -452,20 +460,52 @@ static void adam_window_init(AdamWindow *self)
     (void)self;
 }
 
+/* Remember the window's size (and whether it was maximized) for the next
+ * start. A maximized window keeps the size it had before maximizing. */
+static gboolean on_close_request(GtkWindow *win, gpointer user_data)
+{
+    AdamWindow *self = ADAM_WINDOW(user_data);
+    gboolean maximized = gtk_window_is_maximized(win);
+
+    if (!maximized && !gtk_window_is_fullscreen(win)) {
+        int width = gtk_widget_get_width(GTK_WIDGET(win));
+        int height = gtk_widget_get_height(GTK_WIDGET(win));
+        if (width >= 200 && height >= 200) {
+            adamsession_set_int(self->session, "window_width", width);
+            adamsession_set_int(self->session, "window_height", height);
+        }
+    }
+    adamsession_set_int(self->session, "window_maximized", maximized ? 1 : 0);
+    adamsession_settings_flush(self->session);
+    return FALSE;
+}
+
 GtkWidget *adam_window_new(AdwApplication *app, adamsession *session)
 {
-    AdamWindow *self = g_object_new(ADAM_TYPE_WINDOW,
-                                    "application", app,
-                                    "title", "FujiNet Go Adam",
-                                    "default-width", 1088,
-                                    "default-height", 950,
-                                    NULL);
+    int width = adamsession_get_int(session, "window_width", 1088);
+    int height = adamsession_get_int(session, "window_height", 950);
+    AdamWindow *self;
+
+    if (width < 200 || height < 200) {
+        width = 1088;
+        height = 950;
+    }
+    self = g_object_new(ADAM_TYPE_WINDOW,
+                        "application", app,
+                        "title", "FujiNet Go Adam",
+                        "default-width", width,
+                        "default-height", height,
+                        NULL);
     AdwToolbarView *view;
     AdwHeaderBar *header;
     GtkEventController *keys;
     GMenu *menu;
 
     self->session = session;
+    if (adamsession_get_int(session, "window_maximized", 0))
+        gtk_window_maximize(GTK_WINDOW(self));
+    g_signal_connect(self, "close-request", G_CALLBACK(on_close_request),
+                     self);
 
     g_action_map_add_action_entries(G_ACTION_MAP(self), win_actions,
                                     G_N_ELEMENTS(win_actions), self);

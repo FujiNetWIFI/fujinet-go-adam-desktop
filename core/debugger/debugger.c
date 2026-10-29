@@ -1996,7 +1996,7 @@ int adamdebug_fujinet_state(adamdebug *d, char *dst, int dstsz)
     int n;
 
     if (dstsz <= 0) return 0;
-    if (!adamsession_fujinet_running(s))
+    if (!adamsession_fujinet_running(s) && !adamsession_fujinet_external(s))
         link = "no FujiNet runtime";
     else if (!adamsession_is_running(s))
         link = "the ADAM is off";
@@ -2004,8 +2004,8 @@ int adamdebug_fujinet_state(adamdebug *d, char *dst, int dstsz)
         link = "FujiNet connected";
     else
         link = "waiting for FujiNet";
-    n = snprintf(dst, (size_t)dstsz, "BoIP     127.0.0.1:%d\nLink     %s\n\n",
-                 ADAMSESSION_BOIP_PORT, link);
+    n = snprintf(dst, (size_t)dstsz, "BoIP     %s\nLink     %s\n\n",
+                 adamsession_boip_endpoint(s), link);
     if (n < 0) n = 0;
     if (n >= dstsz) return dstsz - 1;
     if (d->fuji) {

@@ -150,6 +150,12 @@ static void eject_cart(void)
 
 static void show_fujinet_config(void)
 {
+    if (adamsession_fujinet_external(g_session)) {
+        MessageBoxA(g_hwnd, "FujiNet is external: use the web UI of the "
+                    "instance that connects to this app.",
+                    "FujiNet Go Adam", MB_ICONINFORMATION);
+        return;
+    }
     ShellExecuteA(NULL, "open", adamsession_fujinet_webui_url(g_session),
                   NULL, NULL, SW_SHOWNORMAL);
 }
@@ -228,6 +234,12 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 static void show_fujinet_log(HINSTANCE inst)
 {
     static int registered;
+    if (adamsession_fujinet_external(g_session)) {
+        MessageBoxA(g_hwnd, "FujiNet is external: its console output is in "
+                    "the process that is running it.", "FujiNet Go Adam",
+                    MB_ICONINFORMATION);
+        return;
+    }
     if (g_log_window) {
         SetForegroundWindow(g_log_window);
         return;
@@ -256,6 +268,166 @@ static void show_fujinet_log(HINSTANCE inst)
     SetTimer(g_log_window, LOG_TIMER_ID, 1000, NULL);
     SendMessageA(g_log_window, WM_TIMER, LOG_TIMER_ID, 0);
     ShowWindow(g_log_window, SW_SHOW);
+}
+
+/* ---- FujiNet connection window ------------------------------------------- */
+
+#define IDC_CONN_EXTERNAL 301
+#define IDC_CONN_ADDR     302
+#define IDC_CONN_OK       303
+#define IDC_CONN_CANCEL   304
+#ifndef EM_SETCUEBANNER
+#define EM_SETCUEBANNER 0x1501
+#endif
+
+static HWND g_conn_window;
+
+static HWND conn_child(HWND parent, const char *cls, const char *text,
+                       DWORD style, int x, int y, int cx, int cy, int id)
+{
+    HWND h = CreateWindowExA(
+        0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, cx, cy, parent,
+        (HMENU)(UINT_PTR)id,
+        (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), NULL);
+    SendMessageA(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT),
+                 TRUE);
+    return h;
+}
+
+static void conn_close(HWND hwnd)
+{
+    EnableWindow(g_hwnd, TRUE);
+    DestroyWindow(hwnd);
+    SetForegroundWindow(g_hwnd);
+}
+
+static void conn_apply(HWND hwnd)
+{
+    char addr[96], host[64];
+    int port, external, changed;
+    const char *old;
+
+    external = SendDlgItemMessageA(hwnd, IDC_CONN_EXTERNAL, BM_GETCHECK, 0,
+                                   0) == BST_CHECKED;
+    GetDlgItemTextA(hwnd, IDC_CONN_ADDR, addr, sizeof(addr));
+    /* trim */
+    {
+        char *s = addr, *e;
+        while (*s == ' ' || *s == '\t') s++;
+        memmove(addr, s, strlen(s) + 1);
+        e = addr + strlen(addr);
+        while (e > addr && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0';
+    }
+    if (external &&
+        adamsession_parse_hostport(addr, host, sizeof(host), &port) != 0) {
+        MessageBoxA(hwnd, "That is not an address:port.\n\nExample: "
+                    "0.0.0.0:65216", "External FujiNet", MB_ICONWARNING);
+        SetFocus(GetDlgItem(hwnd, IDC_CONN_ADDR));
+        return;
+    }
+    old = adamsession_get_str(g_session, "fujinet_external_addr", "");
+    changed = adamsession_get_int(g_session, "fujinet_external", 0) !=
+                  external ||
+              strcmp(old, addr) != 0;
+    adamsession_set_int(g_session, "fujinet_external", external);
+    adamsession_set_str(g_session, "fujinet_external_addr", addr);
+    conn_close(hwnd);
+    if (changed)
+        restart_session();
+}
+
+static LRESULT CALLBACK conn_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDC_CONN_EXTERNAL:
+            EnableWindow(GetDlgItem(hwnd, IDC_CONN_ADDR),
+                         SendDlgItemMessageA(hwnd, IDC_CONN_EXTERNAL,
+                                             BM_GETCHECK, 0, 0) ==
+                             BST_CHECKED);
+            return 0;
+        case IDC_CONN_OK:
+            conn_apply(hwnd);
+            return 0;
+        case IDC_CONN_CANCEL:
+            conn_close(hwnd);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        conn_close(hwnd);
+        return 0;
+    case WM_DESTROY:
+        g_conn_window = NULL;
+        return 0;
+    }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+/* FujiNet > Connection: use the built-in FujiNet, or wait for another
+ * instance to dial in to an address:port. The machine restarts on OK. */
+static void show_fujinet_connection(HINSTANCE inst)
+{
+    static int registered;
+    HWND w;
+    RECT rc;
+    int x, y;
+
+    if (g_conn_window) {
+        SetForegroundWindow(g_conn_window);
+        return;
+    }
+    if (!registered) {
+        WNDCLASSA wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = conn_proc;
+        wc.hInstance = inst;
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = "AdamConnWindow";
+        RegisterClassA(&wc);
+        registered = 1;
+    }
+    GetWindowRect(g_hwnd, &rc);
+    x = rc.left + 60;
+    y = rc.top + 80;
+    g_conn_window = CreateWindowExA(
+        WS_EX_DLGMODALFRAME, "AdamConnWindow", "FujiNet Connection",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, 460, 250, g_hwnd, NULL, inst,
+        NULL);
+    w = g_conn_window;
+    conn_child(w, "BUTTON", "Use external FujiNet",
+               BS_AUTOCHECKBOX | WS_TABSTOP, 16, 14, 420, 22,
+               IDC_CONN_EXTERNAL);
+    conn_child(w, "STATIC", "Listen address:port", 0, 16, 48, 140, 20, 0);
+    {
+        HWND edit = conn_child(w, "EDIT",
+                               adamsession_get_str(g_session,
+                                                   "fujinet_external_addr",
+                                                   ""),
+                               WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 160,
+                               44, 276, 24, IDC_CONN_ADDR);
+        SendMessageA(edit, EM_SETCUEBANNER, FALSE,
+                     (LPARAM)L"0.0.0.0:65216");
+    }
+    conn_child(w, "STATIC",
+               "Skips the built-in FujiNet. Point the other instance's "
+               "[BOIP] host and port here. 0.0.0.0 accepts connections from "
+               "the network; 127.0.0.1 only from this computer.",
+               0, 16, 82, 420, 64, 0);
+    conn_child(w, "BUTTON", "OK", BS_DEFPUSHBUTTON | WS_TABSTOP, 270, 166, 80,
+               26, IDC_CONN_OK);
+    conn_child(w, "BUTTON", "Cancel", BS_PUSHBUTTON | WS_TABSTOP, 356, 166,
+               80, 26, IDC_CONN_CANCEL);
+    {
+        int ext = adamsession_get_int(g_session, "fujinet_external", 0);
+        SendDlgItemMessageA(w, IDC_CONN_EXTERNAL, BM_SETCHECK,
+                            ext ? BST_CHECKED : BST_UNCHECKED, 0);
+        EnableWindow(GetDlgItem(w, IDC_CONN_ADDR), ext);
+    }
+    EnableWindow(g_hwnd, FALSE);
+    ShowWindow(w, SW_SHOW);
 }
 
 /* F12 / View > Debugger: show it (which stops the machine), or hide it and
@@ -324,6 +496,7 @@ static HMENU build_menu(void)
     AppendMenuA(media, MF_STRING, IDM_EJECT_CART, "Eject Cartridge");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)media, "M&edia");
 
+    AppendMenuA(fujinet, MF_STRING, IDM_FUJINET_CONN, "Connection...");
     AppendMenuA(fujinet, MF_STRING, IDM_FUJINET_CONFIG, "Configuration...");
     AppendMenuA(fujinet, MF_STRING, IDM_FUJINET_LOG, "Console Log...");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)fujinet, "&FujiNet");
@@ -343,6 +516,29 @@ static void apply_display_settings(void)
     g_aspect_mode = adamsession_get_int(g_session, "aspect_mode", 0);
     g_smooth = adamsession_get_int(g_session, "smooth_scaling", 0);
     adam_display_set_options(g_aspect_mode, g_smooth);
+}
+
+/* The window's size and whether it was maximized, for the next start. The
+ * restored (not maximized, not fullscreen) rectangle is the one kept. */
+static void save_window_size(HWND hwnd)
+{
+    WINDOWPLACEMENT wpl;
+    int width, height;
+
+    wpl.length = sizeof(wpl);
+    if (g_fullscreen)
+        wpl = g_prev_placement;
+    else if (!GetWindowPlacement(hwnd, &wpl))
+        return;
+    width = wpl.rcNormalPosition.right - wpl.rcNormalPosition.left;
+    height = wpl.rcNormalPosition.bottom - wpl.rcNormalPosition.top;
+    if (width >= 200 && height >= 200) {
+        adamsession_set_int(g_session, "window_width", width);
+        adamsession_set_int(g_session, "window_height", height);
+    }
+    adamsession_set_int(g_session, "window_maximized",
+                        wpl.showCmd == SW_SHOWMAXIMIZED ? 1 : 0);
+    adamsession_settings_flush(g_session);
 }
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -373,6 +569,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_IMPORT_MEDIA: import_media(hwnd); break;
         case IDM_LOAD_CART:  load_cart(hwnd); break;
         case IDM_EJECT_CART: eject_cart(); break;
+        case IDM_FUJINET_CONN:
+            show_fujinet_connection(
+                (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
+            break;
         case IDM_FUJINET_CONFIG: show_fujinet_config(); break;
         case IDM_FUJINET_LOG:
             show_fujinet_log((HINSTANCE)GetWindowLongPtr(hwnd,
@@ -403,9 +603,12 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             MessageBoxIndirectA(&mb);
             break;
         }
-        case IDM_EXIT: DestroyWindow(hwnd); break;
+        case IDM_EXIT: save_window_size(hwnd); DestroyWindow(hwnd); break;
         }
         return 0;
+    case WM_CLOSE:
+        save_window_size(hwnd);
+        break;
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
@@ -451,13 +654,25 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     RegisterClassExA(&wc);
 
     g_menu = build_menu();
-    g_hwnd = CreateWindowExA(
-        0, "AdamMainWindow", "FujiNet Go Adam", WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1088, 950, NULL, g_menu, inst, NULL);
+    {
+        int width = adamsession_get_int(g_session, "window_width", 1088);
+        int height = adamsession_get_int(g_session, "window_height", 950);
+        if (width < 200 || height < 200) {
+            width = 1088;
+            height = 950;
+        }
+        g_hwnd = CreateWindowExA(
+            0, "AdamMainWindow", "FujiNet Go Adam", WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT, CW_USEDEFAULT, width, height, NULL, g_menu, inst,
+            NULL);
+    }
     if (!g_hwnd)
         return 1;
     g_display = adam_display_create(g_hwnd, g_session);
     layout_display();
+    if (adamsession_get_int(g_session, "window_maximized", 0) &&
+        show != SW_SHOWMINIMIZED && show != SW_SHOWMINNOACTIVE)
+        show = SW_SHOWMAXIMIZED;
     ShowWindow(g_hwnd, show);
 
     /* Developer affordances, matching the other frontends. */

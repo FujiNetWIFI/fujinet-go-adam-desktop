@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <QCloseEvent>
 #include <QMainWindow>
 
 #include "adamsession.h"
@@ -23,6 +24,7 @@ public:
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
 
 private:
     void buildMenus();
