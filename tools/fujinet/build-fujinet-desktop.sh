@@ -372,6 +372,19 @@ patch("lib/device/adamnet/adamFuji.cpp", [
     ),
 ])
 
+# --- compiler warnings are not fatal in the embedded build ----------------
+patch("fujinet_pc.cmake", [
+    # The firmware builds its bundled libraries (libsmb2, libnfs, ...) with
+    # -Werror, so a newer compiler's new warning in code that is not ours
+    # fails the whole runtime build. Warnings stay, they just are not fatal.
+    (
+        'add_compile_options(-Werror)\n',
+        'if(NOT FUJINET_EMBEDDED)\n'
+        '    add_compile_options(-Werror)\n'
+        'endif()\n',
+    ),
+])
+
 # --- dist target: no ldd DLL harvesting for the embedded Windows build ----
 # The stock Windows "dist" target copies the executable's dependent DLLs by
 # parsing ldd output. The embedded library links its runtimes statically and
@@ -745,7 +758,9 @@ fi
 
 (
     cd "${CLONE_DIR}"
-    FUJINET_EMBEDDED=1 bash ./build.sh "${BUILD_FLAGS}" "${PC_TARGET}"
+    # -y: build.sh's prerequisite check installs a missing pyyaml/Jinja2 into
+    # the venv instead of stopping to ask (there is nobody to ask in CI).
+    FUJINET_EMBEDDED=1 bash ./build.sh -y "${BUILD_FLAGS}" "${PC_TARGET}"
 )
 
 printf '%s' "${TARGET_KEY}" > "${TARGET_KEY_FILE}"
