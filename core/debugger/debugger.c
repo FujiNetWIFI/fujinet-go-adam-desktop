@@ -1476,6 +1476,12 @@ int adamdebug_load_symbols(adamdebug *d, const char *path, char *msg,
         }
         dot = strrchr(cart, '.');
         slash = strrchr(cart, '/');
+#ifdef _WIN32
+        {
+            const char *bs = strrchr(cart, '\\');
+            if (bs && (!slash || bs > slash)) slash = bs;
+        }
+#endif
         stem = (dot && (!slash || dot > slash)) ? (size_t)(dot - cart)
                                                 : strlen(cart);
         path = NULL;

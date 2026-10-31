@@ -510,11 +510,28 @@ int adamsession_fujinet_copy_log(adamsession *s, char *dst, int max)
 /** Media import                                                           **/
 /****************************************************************************/
 
+/* File name part of a path. Windows paths use '\' (and a drive colon). */
+static const char *path_base(const char *path)
+{
+    const char *base = path;
+    const char *p;
+
+    for (p = path; *p; p++) {
+        if (*p == '/'
+#ifdef _WIN32
+            || *p == '\\' || (*p == ':' && p == path + 1)
+#endif
+            )
+            base = p + 1;
+    }
+    return base;
+}
+
 static const char *path_ext(const char *path)
 {
-    const char *dot = strrchr(path, '.');
-    const char *slash = strrchr(path, '/');
-    if (!dot || (slash && dot < slash)) return "";
+    const char *base = path_base(path);
+    const char *dot = strrchr(base, '.');
+    if (!dot) return "";
     return dot + 1;
 }
 
@@ -529,11 +546,10 @@ int adamsession_import_media(adamsession *s, const char *src_path,
                              char *dest_out, int dest_sz)
 {
     const char *ext = path_ext(src_path);
-    const char *base = strrchr(src_path, '/');
+    const char *base = path_base(src_path);
     const char *dir;
     char dst[ADAM_PATH_MAX];
 
-    base = base ? base + 1 : src_path;
     if (ext_is(ext, "dsk") || ext_is(ext, "ddp")) {
         if (!s->fujinet_sd[0]) {
             session_set_error(s, "No FujiNet SD directory (FujiNet runtime "
