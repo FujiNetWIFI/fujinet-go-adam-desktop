@@ -21,6 +21,7 @@
 #include <cstdlib>
 
 #include "DisplayWidget.h"
+#include "SoftDisplayWidget.h"
 #include "FujiNetWindows.h"
 #include "SettingsDialog.h"
 #include "debugger/DebuggerWindow.h"
@@ -38,11 +39,15 @@ MainWindow::MainWindow(adamsession *session, QWidget *parent)
             setWindowState(windowState() | Qt::WindowMaximized);
     }
 
-    m_display = new DisplayWidget(session, this);
-    setCentralWidget(m_display);
+    auto *gpu = new DisplayWidget(session, this);
+    m_display = gpu;
+    setCentralWidget(gpu);
+    /* No usable GPU device: fall back to painting in software */
+    connect(gpu, &QRhiWidget::renderFailed, this, &MainWindow::useSoftwareDisplay,
+            Qt::QueuedConnection);
     buildMenus();
     applyDisplaySettings();
-    m_display->setFocus();
+    gpu->setFocus();
 
     /* Developer affordance: open the debugger alongside the main window. */
     if (getenv("ADAM_OPEN_DEBUGGER"))
@@ -51,6 +56,17 @@ MainWindow::MainWindow(adamsession *session, QWidget *parent)
      * parent. */
     if (getenv("ADAM_OPEN_KEYPAD"))
         QTimer::singleShot(0, this, &MainWindow::toggleKeypad);
+}
+
+void MainWindow::useSoftwareDisplay()
+{
+    if (dynamic_cast<SoftDisplayWidget *>(m_display))
+        return;
+    auto *soft = new SoftDisplayWidget(m_session, this);
+    m_display = soft;
+    setCentralWidget(soft);   /* deletes the GPU display, which stops its feed */
+    applyDisplaySettings();
+    soft->setFocus();
 }
 
 void MainWindow::applyDisplaySettings()

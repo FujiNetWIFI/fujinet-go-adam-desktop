@@ -9,6 +9,8 @@
 
 #include "webview.h"
 
+#include <string.h>
+
 #ifdef HAVE_WEBKIT
 #include <webkit/webkit.h>
 #endif
@@ -90,7 +92,21 @@ static gboolean log_refresh(gpointer user_data)
     GtkTextIter end;
     int n = adamsession_fujinet_copy_log(st->session, buf, sizeof(buf));
 
-    gtk_text_buffer_set_text(tb, n > 0 ? buf : "(no FujiNet output yet)", -1);
+    {
+        const char *text = n > 0 ? buf : "(no FujiNet output yet)";
+        GtkTextIter s;
+        char *old;
+        gboolean same;
+
+        /* unchanged log: leave the buffer (and the reader's selection) be */
+        gtk_text_buffer_get_bounds(tb, &s, &end);
+        old = gtk_text_buffer_get_text(tb, &s, &end, FALSE);
+        same = strcmp(old, text) == 0;
+        g_free(old);
+        if (same)
+            return G_SOURCE_CONTINUE;
+        gtk_text_buffer_set_text(tb, text, -1);
+    }
     gtk_text_buffer_get_end_iter(tb, &end);
     gtk_text_view_scroll_to_iter(st->view, &end, 0, FALSE, 0, 1.0);
     return G_SOURCE_CONTINUE;

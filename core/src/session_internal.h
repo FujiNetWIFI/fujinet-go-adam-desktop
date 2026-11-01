@@ -11,6 +11,7 @@
 #define ADAMSESSION_INTERNAL_H
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #include "adamcore.h"
@@ -77,6 +78,11 @@ struct adamsession {
     pthread_mutex_t frame_mtx;
     uint16_t frame[ADAMSESSION_FB_WIDTH * ADAMSESSION_FB_HEIGHT];
     uint64_t frame_serial;
+    int frame_valid;                 /* frame[] holds a frame of this run */
+    atomic_ullong frame_count;       /* frames run, published or not */
+    pthread_mutex_t cb_mtx;          /* held across frame_cb calls */
+    adamsession_frame_cb frame_cb;
+    void *frame_cb_ctx;
 
     /* ---- vsync phase-lock (UI tick -> emulator pacing) ---- */
     pthread_mutex_t vs_mtx;

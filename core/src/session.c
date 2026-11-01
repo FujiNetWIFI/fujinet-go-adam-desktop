@@ -13,6 +13,7 @@
  */
 
 #include <errno.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,12 +97,43 @@ static long wait_next_vsync(adamsession *s)
 /** Frame store                                                            **/
 /****************************************************************************/
 
+/* A frame identical to the one in the slot is not a new frame: the serial
+ * stays and nobody is called. The machine runs at 60 Hz whatever it shows,
+ * and most of what a screen shows (CONFIG, a menu) does not move, so without
+ * this the frontends would convert, upload and draw the same picture sixty
+ * times a second. */
 void session_publish_frame(adamsession *s, const uint16_t *fb)
 {
+    atomic_fetch_add(&s->frame_count, 1);
     pthread_mutex_lock(&s->frame_mtx);
+    if (s->frame_valid && memcmp(s->frame, fb, sizeof(s->frame)) == 0) {
+        pthread_mutex_unlock(&s->frame_mtx);
+        return;
+    }
     memcpy(s->frame, fb, sizeof(s->frame));
+    s->frame_valid = 1;
     s->frame_serial++;
     pthread_mutex_unlock(&s->frame_mtx);
+
+    pthread_mutex_lock(&s->cb_mtx);
+    if (s->frame_cb)
+        s->frame_cb(s->frame_cb_ctx);
+    pthread_mutex_unlock(&s->cb_mtx);
+}
+
+void adamsession_set_frame_callback(adamsession *s, adamsession_frame_cb cb,
+                                    void *ctx)
+{
+    if (!s) return;
+    pthread_mutex_lock(&s->cb_mtx);
+    s->frame_cb = cb;
+    s->frame_cb_ctx = ctx;
+    pthread_mutex_unlock(&s->cb_mtx);
+}
+
+uint64_t adamsession_frame_count(adamsession *s)
+{
+    return s && s->running ? atomic_load(&s->frame_count) : 0;
 }
 
 int adamsession_copy_frame(adamsession *s, uint16_t *dst, uint64_t *serial_inout)
@@ -243,6 +275,7 @@ adamsession *adamsession_new(const adamsession_paths *paths)
 
     pthread_mutex_init(&s->lifecycle_mtx, NULL);
     pthread_mutex_init(&s->frame_mtx, NULL);
+    pthread_mutex_init(&s->cb_mtx, NULL);
     pthread_mutex_init(&s->vs_mtx, NULL);
     adam_cond_init_monotonic(&s->vs_cv);
 
@@ -261,6 +294,7 @@ void adamsession_free(adamsession *s)
     settings_free_all(s);
     pthread_mutex_destroy(&s->lifecycle_mtx);
     pthread_mutex_destroy(&s->frame_mtx);
+    pthread_mutex_destroy(&s->cb_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
     pthread_cond_destroy(&s->vs_cv);
     free(s);
@@ -391,6 +425,10 @@ int adamsession_start(adamsession *s, const adamsession_start_opts *opts)
 
     s->stop_flag = 0;
     s->frame_serial = 0;
+    pthread_mutex_lock(&s->frame_mtx);
+    s->frame_valid = 0;
+    pthread_mutex_unlock(&s->frame_mtx);
+    atomic_store(&s->frame_count, 0);
     s->vs_ns = 0;
     s->vs_seen_ns = 0;
     s->vs_iv_us = 0;

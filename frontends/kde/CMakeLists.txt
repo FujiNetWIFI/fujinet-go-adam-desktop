@@ -3,7 +3,8 @@
 # port clean), with an embedded QtWebEngine view of the FujiNet web admin
 # when available (WITH_WEBVIEW). Found-or-skipped.
 
-find_package(Qt6 6.4 COMPONENTS Widgets OpenGLWidgets QUIET)
+# Qt 6.7 for QRhiWidget (the GPU display); ShaderTools bakes its shaders.
+find_package(Qt6 6.7 COMPONENTS Widgets GuiPrivate ShaderTools QUIET)
 
 if(NOT Qt6_FOUND)
   message(STATUS "KDE frontend: Qt6 Widgets not found -- skipping")
@@ -16,6 +17,8 @@ add_executable(fujinet-go-adam-kde
   main.cpp
   MainWindow.cpp
   DisplayWidget.cpp
+  SoftDisplayWidget.cpp
+  FrameFeed.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
   KeyForward.cpp
@@ -23,7 +26,11 @@ add_executable(fujinet-go-adam-kde
   debugger/DebuggerWindow.cpp
 )
 target_link_libraries(fujinet-go-adam-kde PRIVATE
-  adamsession Qt6::Widgets Qt6::OpenGLWidgets)
+  adamsession Qt6::Widgets Qt6::GuiPrivate)
+# The display's shaders, baked for every backend and embedded as resources.
+qt_add_shaders(fujinet-go-adam-kde "display_shaders"
+  PREFIX "/"
+  FILES shaders/display.vert shaders/display.frag)
 target_compile_options(fujinet-go-adam-kde PRIVATE -Wall -Wextra)
 target_compile_definitions(fujinet-go-adam-kde PRIVATE
   ADAM_ICON_FILE="${CMAKE_SOURCE_DIR}/data/icons/hicolor/256x256/apps/fujinet-go-adam.png")
@@ -57,9 +64,12 @@ endif()
 if(Qt6Test_FOUND)
   add_executable(debugger_test debugger_test.cpp FujiNetWindows.cpp
                  debugger/DebuggerWindow.cpp MainWindow.cpp DisplayWidget.cpp
-                 SettingsDialog.cpp KeyForward.cpp keypad/KeypadWindow.cpp)
+                 SoftDisplayWidget.cpp FrameFeed.cpp SettingsDialog.cpp KeyForward.cpp keypad/KeypadWindow.cpp)
   target_link_libraries(debugger_test PRIVATE adamsession Qt6::Widgets
-                        Qt6::OpenGLWidgets Qt6::Test)
+                        Qt6::GuiPrivate Qt6::Test)
+  qt_add_shaders(debugger_test "display_shaders_test"
+    PREFIX "/"
+    FILES shaders/display.vert shaders/display.frag)
   target_include_directories(debugger_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_options(debugger_test PRIVATE -Wall -Wextra)
   add_test(NAME debugger_kde COMMAND debugger_test)

@@ -112,6 +112,20 @@ const char *adamsession_last_error(const adamsession *s);
  * (e.g. first paint after a window map). */
 int  adamsession_copy_frame(adamsession *s, uint16_t *dst, uint64_t *serial_inout);
 
+/* Ask to be told when a new frame is ready, for a frontend with no frame
+ * clock of its own: cb(ctx) runs on the emulator thread after each frame is
+ * published (a frame identical to the previous one is not published again).
+ * Keep it quick (post an event and return) and do not call into the session
+ * from it. Passing NULL stops the calls, and returns only after any call in
+ * flight has finished, so ctx may be freed right after. */
+typedef void (*adamsession_frame_cb)(void *ctx);
+void adamsession_set_frame_callback(adamsession *s, adamsession_frame_cb cb,
+                                    void *ctx);
+/* Frames the machine has run since it started, including the ones identical
+ * to their predecessor (which are not published again): use it to ask "is the
+ * machine running", not "is the picture changing". */
+uint64_t adamsession_frame_count(adamsession *s);
+
 /* Feed the UI's vsync ticks (frame-clock time, CLOCK_MONOTONIC ns). While a
  * steady ~60Hz tick stream arrives, the emulator phase-locks one emulated
  * frame per tick; otherwise it paces on the wall clock (59.922 Hz). */

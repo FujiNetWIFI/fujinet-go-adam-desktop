@@ -209,6 +209,26 @@ static void set_text_at(GtkTextView *view, const char *text, gboolean follow)
         gtk_text_view_get_line_at_y(view, &it, (int)gtk_adjustment_get_value(adj), NULL);
         top = gtk_text_iter_get_line(&it);
     }
+    {
+        GtkTextIter s, e;
+        char *old;
+        gboolean same;
+
+        /* unchanged text is not set again: it would reset the selection and
+         * relayout for nothing */
+        gtk_text_buffer_get_bounds(b, &s, &e);
+        old = gtk_text_buffer_get_text(b, &s, &e, FALSE);
+        same = strcmp(old, clean) == 0;
+        g_free(old);
+        if (same) {
+            g_free(clean);
+            if (follow) {
+                g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+                if (adj) on_log_resized(adj, view);
+            }
+            return;
+        }
+    }
     gtk_text_buffer_set_text(b, clean, -1);
     g_free(clean);
     if (follow) {
@@ -793,6 +813,23 @@ static gboolean tick_refresh(gpointer ud)
         refresh_now(w);
     }
     return G_SOURCE_CONTINUE;
+}
+
+/* The refresh timer runs only while the window is mapped. */
+static void on_win_map(GtkWidget *widget, gpointer ud)
+{
+    DbgWin *w = ud;
+    (void)widget;
+    if (!w->timer && !w->closing)
+        w->timer = g_timeout_add(100, tick_refresh, w);
+}
+
+static void on_win_unmap(GtkWidget *widget, gpointer ud)
+{
+    DbgWin *w = ud;
+    (void)widget;
+    if (w->timer) g_source_remove(w->timer);
+    w->timer = 0;
 }
 
 /* ---- handlers ------------------------------------------------------------- */
@@ -1839,7 +1876,8 @@ void adam_debugger_show(GtkWindow *parent, adamsession *session)
     gtk_widget_add_controller(GTK_WIDGET(w->win), keys);
 
     attach_and_refresh(w);
-    w->timer = g_timeout_add(100, tick_refresh, w);
+    g_signal_connect(w->win, "map", G_CALLBACK(on_win_map), w);
+    g_signal_connect(w->win, "unmap", G_CALLBACK(on_win_unmap), w);
     gtk_window_present(w->win);
     if (gtk_notebook_get_current_page(w->notebook) == TAB_CONSOLE)
         gtk_widget_grab_focus(GTK_WIDGET(w->console_in));

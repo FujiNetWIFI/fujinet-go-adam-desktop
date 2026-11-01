@@ -96,8 +96,11 @@ void fujinet_log_show(QWidget *parent, adamsession *session)
     auto refresh = [view, session]() {
         static char buf[128 * 1024];
         const int n = adamsession_fujinet_copy_log(session, buf, sizeof(buf));
-        view->setPlainText(n > 0 ? QString::fromUtf8(buf)
-                                 : QStringLiteral("(no FujiNet output yet)"));
+        const QString text = n > 0 ? QString::fromUtf8(buf)
+                                   : QStringLiteral("(no FujiNet output yet)");
+        if (view->toPlainText() == text)
+            return;   /* unchanged: leave the view (and any selection) be */
+        view->setPlainText(text);
         view->verticalScrollBar()->setValue(
             view->verticalScrollBar()->maximum());
     };

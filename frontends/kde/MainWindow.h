@@ -10,7 +10,7 @@
 
 #include "adamsession.h"
 
-class DisplayWidget;
+class DisplayView;
 class KeypadWindow;
 
 class MainWindow : public QMainWindow {
@@ -28,6 +28,7 @@ protected:
 
 private:
     void buildMenus();
+    void useSoftwareDisplay();
     void importMedia();
     void loadCartridge();
     void ejectCartridge();
@@ -39,6 +40,6 @@ private:
     void showAbout();
 
     adamsession *m_session;
-    DisplayWidget *m_display;
+    DisplayView *m_display;
     KeypadWindow *m_keypad = nullptr;
 };

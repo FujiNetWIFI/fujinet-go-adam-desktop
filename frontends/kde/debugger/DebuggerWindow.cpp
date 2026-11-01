@@ -348,8 +348,8 @@ DebuggerWindow::DebuggerWindow(adamsession *session, QWidget *parent)
     setCentralWidget(central);
     statusBar();
 
+    /* the timer runs only while the window is shown (showEvent/hideEvent) */
     connect(&m_timer, &QTimer::timeout, this, [this] { tick(); });
-    m_timer.start(100);
 }
 
 /* Only at exit, with the main window: the session outlives its windows. */
@@ -1534,6 +1534,7 @@ void DebuggerWindow::keyPressEvent(QKeyEvent *e)
 void DebuggerWindow::showEvent(QShowEvent *e)
 {
     QMainWindow::showEvent(e);
+    m_timer.start(100);
     if (e->spontaneous()) return;
     adamdebug_attach(m_dbg);
     m_wasStopped = false;
@@ -1552,6 +1553,7 @@ void DebuggerWindow::showEvent(QShowEvent *e)
  * window's spontaneous hide is not a detach. */
 void DebuggerWindow::hideEvent(QHideEvent *e)
 {
+    m_timer.stop();
     if (!e->spontaneous()) adamdebug_detach(m_dbg);
     QMainWindow::hideEvent(e);
 }

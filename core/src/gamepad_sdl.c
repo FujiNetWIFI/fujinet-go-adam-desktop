@@ -166,20 +166,23 @@ static void *gamepad_thread_main(void *arg)
 {
     adamsession *s = arg;
     gamepad_state *g = s->gamepad;
-    int tick = 0;
+    int rescan_ms = 250; /* first pass scans at once */
 
     adam_thread_setname("adam-gamepad");
     while (g->run) {
-        int i;
+        int i, npads, delay;
         SDL_UpdateGamepads();
-        /* Device add/remove is rare; re-enumerate at ~4Hz, poll state at
-         * ~125Hz. Flush the (unused) event queue so it can't grow. */
-        if (tick++ % 32 == 0)
+        /* Device add/remove is rare; re-enumerate at ~4Hz. Flush the
+         * (unused) event queue so it can't grow. */
+        if (rescan_ms >= 250) {
+            rescan_ms = 0;
             sync_devices(s, g);
+        }
         SDL_PumpEvents();
         SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
 
         pthread_mutex_lock(&g->mtx);
+        npads = g->count;
         for (i = 0; i < g->count; i++) {
             int port = g->pads[i].assigned_port >= 0
                            ? g->pads[i].assigned_port
@@ -224,7 +227,9 @@ static void *gamepad_thread_main(void *arg)
             input_pad_set(s, i, port, dirs, fires, keys);
         }
         pthread_mutex_unlock(&g->mtx);
-        SDL_Delay(8);
+        delay = npads > 0 ? 16 : 100;
+        SDL_Delay(delay);
+        rescan_ms += delay;
     }
     return NULL;
 }

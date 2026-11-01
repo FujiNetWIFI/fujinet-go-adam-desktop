@@ -719,17 +719,21 @@ private slots:
      * chord through to the View menu's action) and the View menu entry. */
     void f12FromTheMainWindow()
     {
-        /* the display is a QOpenGLWidget: CI's offscreen Qt has no GL */
-        QOpenGLContext gl;
-        if (!gl.create())
-            QSKIP("no OpenGL context on this platform");
+        /* the display is a QRhiWidget; with no GPU device (CI's offscreen Qt)
+         * the window swaps in the software display, so ask for whichever
+         * is there */
+        QVERIFY(QFile::exists(QStringLiteral(":/shaders/display.vert.qsb")));
+        QVERIFY(QFile::exists(QStringLiteral(":/shaders/display.frag.qsb")));
         MainWindow main(m_s);
         main.show();
         QVERIFY(QTest::qWaitForWindowExposed(&main));
         main.activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(&main));
-        auto *display = main.findChild<DisplayWidget *>();
+        QTest::qWait(300);   /* let a queued renderFailed swap the display */
+        QWidget *display = main.centralWidget();
         QVERIFY(display);
+        display->setFocus();
+        QTRY_VERIFY_WITH_TIMEOUT(QApplication::focusWidget() == display, 2000);
         QCOMPARE(QApplication::focusWidget(), display);
         QVERIFY(m_win->isVisible());
         QTest::keyClick(display, Qt::Key_F12);
