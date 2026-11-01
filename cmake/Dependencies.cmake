@@ -20,8 +20,12 @@ find_package(Git QUIET)
 # Pinned commits, kept in step with the submodule gitlinks (verified below).
 set(ADAMCORE_COMMIT "bc44e1271a41e63729cc2fd4ed337d32fafbe2a2")
 set(ADAMCORE_URL "https://github.com/tschak909/adamcore")
-set(FUJINET_COMMIT "4add1daa8c641df744fa4616b7c25f549d70ebc0")
-set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")
+# FujiNet pin: 4add1daa8 + the BoIP idle-wait fix (fujinet-firmware PR #2247,
+# = master f703133d0 + the fix). Temporary: move back to master when #2247
+# merges. The fork URL is used because the commit is a PR head, which a plain
+# upstream clone does not contain (the submodule fetches it by SHA).
+set(FUJINET_COMMIT "0c9f00c16dff62d2b3c6b08821322f50642594db")
+set(FUJINET_URL "https://github.com/tschak909/fujinet-firmware")
 
 # adam_provide_dependency(NAME <n> PATH <p> URL <u> COMMIT <sha>
 #                         SENTINEL <file> OVERRIDE <VAR> RESULT <out>)
