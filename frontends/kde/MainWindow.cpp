@@ -23,6 +23,7 @@
 #include "DisplayWidget.h"
 #include "SoftDisplayWidget.h"
 #include "FujiNetWindows.h"
+#include "help/HelpWindow.h"
 #include "SettingsDialog.h"
 #include "debugger/DebuggerWindow.h"
 #include "keypad/KeypadWindow.h"
@@ -31,6 +32,7 @@ MainWindow::MainWindow(adamsession *session, QWidget *parent)
     : QMainWindow(parent), m_session(session)
 {
     setWindowTitle(QStringLiteral("FujiNet Go Adam"));
+    setProperty("adamHelpContext", QStringLiteral("main"));
     {
         const int w = adamsession_get_int(session, "window_width", 1088);
         const int h = adamsession_get_int(session, "window_height", 950);
@@ -128,6 +130,18 @@ void MainWindow::buildMenus()
                     [this] { DebuggerWindow::toggleFor(this, m_session); });
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));
+    {
+        /* works from every window of the app (the Controllers window and the
+         * Debugger have the keyboard too) */
+        QAction *helpAct = help->addAction(QStringLiteral("FujiNet Go Adam &Help"));
+        helpAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H));
+        helpAct->setShortcutContext(Qt::ApplicationShortcut);
+        addAction(helpAct);
+        connect(helpAct, &QAction::triggered, this, [this] {
+            adamHelpFor(QApplication::activeWindow() ? QApplication::activeWindow() : this);
+        });
+    }
+    help->addSeparator();
     help->addAction(QStringLiteral("About FujiNet Go Adam"), this,
                     &MainWindow::showAbout);
 }

@@ -16,6 +16,7 @@
 #import "DisplayView.h"
 #import "KeyForward.h"
 #import "debugger/DebuggerWindow.h"
+#import "help/HelpWindow.h"
 #import "keypad/KeypadWindow.h"
 
 #include <stdlib.h>
@@ -232,7 +233,7 @@ static NSArray<NSString *> *machineSettingKeys(void)
     _logWindow.releasedWhenClosed = NO;
 
     NSScrollView *scroll =
-        [[NSScrollView alloc] initWithFrame:frame];
+        [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 36, 820, 524)];
     scroll.hasVerticalScroller = YES;
     scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _logView = [[NSTextView alloc] initWithFrame:frame];
@@ -240,7 +241,17 @@ static NSArray<NSString *> *machineSettingKeys(void)
     _logView.font = [NSFont monospacedSystemFontOfSize:11
                                                 weight:NSFontWeightRegular];
     scroll.documentView = _logView;
-    _logWindow.contentView = scroll;
+    {
+        /* the log over a strip with the Help button */
+        NSView *box = [[NSView alloc] initWithFrame:frame];
+        NSButton *help = AdamHelpButton(@"fujilog");
+        [help setFrameOrigin:NSMakePoint(10, 6)];
+        help.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+        [box addSubview:scroll];
+        [box addSubview:help];
+        _logWindow.contentView = box;
+    }
+    AdamSetHelpContext(_logWindow, @"fujilog");
 
     _logTimer = [NSTimer
         scheduledTimerWithTimeInterval:1.0
@@ -482,7 +493,16 @@ static NSArray<NSString *> *machineSettingKeys(void)
     _settingsWindow.title = @"Settings";
     _settingsWindow.releasedWhenClosed = NO;
     _settingsWindow.delegate = self;
-    _settingsWindow.contentView = root;
+    {
+        /* the settings over a strip with the Help button */
+        NSButton *helpBtn = AdamHelpButton(@"prefs/Machine");
+        NSStackView *wrap = [NSStackView stackViewWithViews:@[root, helpBtn]];
+        wrap.orientation = NSUserInterfaceLayoutOrientationVertical;
+        wrap.alignment = NSLayoutAttributeLeading;
+        wrap.edgeInsets = NSEdgeInsetsMake(0, 16, 12, 16);
+        _settingsWindow.contentView = wrap;
+        AdamSetHelpContext(_settingsWindow, @"prefs/Machine");
+    }
     [_settingsWindow center];
     [_settingsWindow makeKeyAndOrderFront:nil];
 }
@@ -650,7 +670,24 @@ static NSArray<NSString *> *machineSettingKeys(void)
     [menubar addItem:windowItem];
     NSApp.windowsMenu = windowMenu;
 
+    NSMenuItem *helpItem = [[NSMenuItem alloc] init];
+    NSMenu *help = [[NSMenu alloc] initWithTitle:@"Help"];
+    /* openHelp:, not showHelp: (AppKit's: "Help isn't available") */
+    [help addItem:[self item:@"FujiNet Go Adam Help" action:@selector(openHelp:) key:@"?"]];
+    helpItem.submenu = help;
+    [menubar addItem:helpItem];
+
     NSApp.mainMenu = menubar;
+    NSApp.helpMenu = help;
+    /* the Help menu's search field finds the Help's sections too */
+    [NSApp registerUserInterfaceItemSearchHandler:[AdamHelpWindow shared]];
+}
+
+/* For the window in front: Settings, the debugger's tab ... */
+- (void)openHelp:(id)sender
+{
+    (void)sender;
+    [[AdamHelpWindow shared] showFor:[NSApp keyWindow]];
 }
 
 /* ---- lifecycle ------------------------------------------------------------ */

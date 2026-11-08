@@ -12,7 +12,8 @@
       configure everything through the embedded FujiNet web UI, and play
       with automatic gamepad support. For developers it includes a full
       debugger with breakpoints, stepping, instruction history, EOS/OS7
-      symbols, and live VDP table viewers.
+      symbols, and live VDP table viewers. Built-in, searchable Help covers
+      all of it.
     </p>
   </description>
   <launchable type="desktop-id">online.fujinet.go.adam.gnome.desktop</launchable>

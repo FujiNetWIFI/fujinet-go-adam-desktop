@@ -8,10 +8,13 @@
  */
 
 #include "FujiNetWindows.h"
+#include "help/HelpWindow.h"
 
+#include <QHBoxLayout>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QScrollBar>
+#include <QShortcut>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -80,6 +83,8 @@ void fujinet_log_show(QWidget *parent, adamsession *session)
     win->setAttribute(Qt::WA_DeleteOnClose);
     win->setWindowTitle(QStringLiteral("FujiNet Console Log"));
     win->resize(820, 560);
+    win->setProperty("adamHelpContext", QStringLiteral("fujilog"));
+    new QShortcut(QKeySequence(Qt::Key_F1), win, [] { adamHelpFor(win); });
 
     auto *view = new QPlainTextEdit(win);
     view->setReadOnly(true);
@@ -91,6 +96,13 @@ void fujinet_log_show(QWidget *parent, adamsession *session)
     auto *layout = new QVBoxLayout(win);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(view);
+    {
+        auto *bar = new QHBoxLayout;
+        bar->setContentsMargins(6, 2, 6, 4);
+        bar->addStretch(1);
+        bar->addWidget(adamHelpButton(QStringLiteral("fujilog")));
+        layout->addLayout(bar);
+    }
 
     auto *timer = new QTimer(win);
     auto refresh = [view, session]() {

@@ -42,6 +42,7 @@
 
 #include "adamdebug.h"
 #include "../window.h"
+#include "../help/help_window.h"
 
 #define DISASM_WINDOW 48
 #define NREGS 17
@@ -1344,10 +1345,18 @@ static void on_fuji_clear(GtkButton *b, gpointer ud)
 /* The notebook also switches pages as it is taken apart with the window
  * (main window closing), before the window's "destroy": only a mapped window
  * has a tab to refresh, a hidden one refreshes when it is shown. */
+/* Help's contexts (adamhelp.h), one per tab */
+static const char *const k_tab_contexts[] = {
+    "debugger/console", "debugger/cpu", "debugger/disassembly", "debugger/vdp",
+    "debugger/breakpoints", "debugger/io", "debugger/fujinet",
+};
+
 static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num, gpointer ud)
 {
     DbgWin *w = ud;
     (void)nb; (void)page;
+    if (num < G_N_ELEMENTS(k_tab_contexts))
+        adam_help_set_context(w->win, k_tab_contexts[num]);
     if (!w->closing && gtk_widget_get_mapped(GTK_WIDGET(w->win)))
         refresh_tab(w, (int)num);
 }
@@ -1365,6 +1374,7 @@ static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code,
     DbgWin *w = ud;
     (void)c; (void)code;
     switch (keyval) {
+    case GDK_KEY_F1: adam_help_for(w->win); return TRUE;
     case GDK_KEY_F5: on_run(NULL, w); return TRUE;
     case GDK_KEY_F7:
         if (st & GDK_SHIFT_MASK) on_frame(NULL, w); else on_step(NULL, w);
@@ -1856,6 +1866,10 @@ void adam_debugger_show(GtkWindow *parent, adamsession *session)
     tab = tab_from_env();
     if (tab >= 0) gtk_notebook_set_current_page(w->notebook, tab);
     g_signal_connect(notebook, "switch-page", G_CALLBACK(on_switch_page), w);
+    {
+        int cur = gtk_notebook_get_current_page(w->notebook);
+        adam_help_set_context(w->win, k_tab_contexts[cur > 0 && cur < 7 ? cur : 0]);
+    }
 
     overlay = adw_toast_overlay_new();
     w->toasts = ADW_TOAST_OVERLAY(overlay);
@@ -1865,6 +1879,7 @@ void adam_debugger_show(GtkWindow *parent, adamsession *session)
     header = adw_header_bar_new();
     w->title = ADW_WINDOW_TITLE(adw_window_title_new("Debugger", ""));
     adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), GTK_WIDGET(w->title));
+    adw_header_bar_pack_end(ADW_HEADER_BAR(header), adam_help_button(NULL));
     toolbar = adw_toolbar_view_new();
     adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
     adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), overlay);

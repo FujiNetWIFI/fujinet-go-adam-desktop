@@ -21,6 +21,7 @@ add_executable(fujinet-go-adam-kde
   FrameFeed.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
+  help/HelpWindow.cpp
   KeyForward.cpp
   keypad/KeypadWindow.cpp
   debugger/DebuggerWindow.cpp
@@ -49,7 +50,7 @@ endif()
 find_package(Qt6 COMPONENTS Test QUIET)
 if(Qt6Test_FOUND)
   add_executable(keypad_test keypad_test.cpp KeyForward.cpp
-                 keypad/KeypadWindow.cpp)
+                 keypad/KeypadWindow.cpp help/HelpWindow.cpp)
   target_link_libraries(keypad_test PRIVATE adamsession Qt6::Widgets Qt6::Test)
   target_include_directories(keypad_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_options(keypad_test PRIVATE -Wall -Wextra)
@@ -64,7 +65,8 @@ endif()
 if(Qt6Test_FOUND)
   add_executable(debugger_test debugger_test.cpp FujiNetWindows.cpp
                  debugger/DebuggerWindow.cpp MainWindow.cpp DisplayWidget.cpp
-                 SoftDisplayWidget.cpp FrameFeed.cpp SettingsDialog.cpp KeyForward.cpp keypad/KeypadWindow.cpp)
+                 SoftDisplayWidget.cpp FrameFeed.cpp SettingsDialog.cpp KeyForward.cpp keypad/KeypadWindow.cpp
+                 help/HelpWindow.cpp)
   target_link_libraries(debugger_test PRIVATE adamsession Qt6::Widgets
                         Qt6::GuiPrivate Qt6::Test)
   qt_add_shaders(debugger_test "display_shaders_test"

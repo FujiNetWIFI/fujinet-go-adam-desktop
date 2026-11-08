@@ -25,6 +25,7 @@
 
 #import "../AccentColor.h"
 #import "../KeyForward.h"
+#import "../help/HelpWindow.h"
 
 /* -2 idle, -1 armed and waiting for a target, >= 0 waiting for a key or
  * pad button for that target. */
@@ -222,6 +223,7 @@ static const int kOrder[12] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 11 };
                     backing:NSBackingStoreBuffered
                       defer:NO];
     [win setTitle:@"Controllers"];
+    AdamSetHelpContext(win, @"keypad");
     /* Floats above the machine's window and stays out of the way, which is
      * what a utility panel is for. */
     [win setLevel:NSFloatingWindowLevel];
@@ -276,8 +278,11 @@ static const int kOrder[12] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 11 };
     [content addSubview:defaults];
 
     _hint = [NSTextField labelWithString:@""];
+    NSButton *helpBtn = AdamHelpButton(@"keypad");
+    [helpBtn setFrame:NSMakeRect(width - KP_MARGIN - 30, rowY + (KP_BTN_H - 26) / 2, 26, 26)];
+    [content addSubview:helpBtn];
     [_hint setFrame:NSMakeRect(x1 + 252, rowY + (KP_BTN_H - 18) / 2,
-                               width - x1 - 252 - KP_MARGIN, 18)];
+                               width - x1 - 252 - KP_MARGIN - 36, 18)];
     [_hint setTextColor:[NSColor secondaryLabelColor]];
     [_hint setLineBreakMode:NSLineBreakByTruncatingTail];
     [content addSubview:_hint];

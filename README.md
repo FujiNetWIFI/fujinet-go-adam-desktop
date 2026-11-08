@@ -55,6 +55,12 @@ platforms are very welcome.
   Settings window (⌘,) all read and write the same keys.
 - No on-screen input panels appear unless you ask for them.
 
+- **Built-in Help.** **Help ▸ FujiNet Go Adam Help** (Ctrl+Shift+H, ⌘? on a
+  Mac) opens a searchable Help, and the Help buttons in Preferences, the
+  Controllers window, the debugger and the console log open the topic for what
+  they show. The text is [data/help/help.md](data/help/help.md), which GitHub
+  shows as it is; the build embeds it and every frontend lays it out natively.
+
 ### Developer debugger (F12)
 
 A console and a Z80 debugger: execute breakpoints with conditions, ranges,

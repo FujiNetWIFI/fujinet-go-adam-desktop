@@ -10,6 +10,7 @@
 #include "prefs.h"
 
 #include "window.h"
+#include "help/help_window.h"
 
 /* Option lists mirror the Android app's Settings.kt. */
 static const char *const machine_names[] = {"ADAM (computer)",
@@ -186,7 +187,9 @@ void adam_prefs_show(AdamWindow *parent, adamsession *session,
     state->session = session;
     state->display_changed = display_changed;
 
+    adw_preferences_page_set_name(page, "Machine");
     adw_preferences_group_set_title(machine, "Machine");
+    adw_preferences_group_set_header_suffix(machine, adam_help_button("prefs/Machine"));
     adw_preferences_group_set_description(
         machine, "Applied by restarting the session when this dialog closes");
     adw_preferences_group_add(

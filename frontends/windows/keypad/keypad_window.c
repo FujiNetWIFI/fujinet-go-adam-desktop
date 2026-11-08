@@ -40,6 +40,7 @@
 #include <string.h>
 
 #include "../accent_button.h"
+#include "../help/help_window.h"
 #include "../keys.h"
 #include "../resource.h"
 
@@ -48,7 +49,7 @@
 
 #define S(v) MulDiv((v), g_dpi, 96)
 
-enum { K_CONTROL, K_MAP, K_CLEAR, K_DEFAULTS };
+enum { K_CONTROL, K_MAP, K_CLEAR, K_DEFAULTS, K_HELP };
 enum { MAP_OFF, MAP_ARMED, MAP_PICKED };
 
 typedef struct {
@@ -62,7 +63,7 @@ typedef struct {
 static HWND g_panel;
 static adamsession *g_session;
 static int g_dpi = 96;
-static pad_button g_btn[ADAM_TARGET_COUNT + 3];
+static pad_button g_btn[ADAM_TARGET_COUNT + 4];
 static int g_nbtn;
 static int g_held = -1;            /* control under the captured mouse */
 static int g_hot = -1;             /* control under the pointer */
@@ -165,6 +166,7 @@ static void layout(void)
     add_button(K_MAP, -1, "Map", 0, margin, y, S(80), S(28));
     add_button(K_CLEAR, -1, "Clear", 0, margin + S(84), y, S(80), S(28));
     add_button(K_DEFAULTS, -1, "Defaults", 0, margin + 2 * S(84), y, S(80), S(28));
+    add_button(K_HELP, -1, "Help", 0, margin + 3 * S(84), y, S(80), S(28));
     y += S(28) + gap;
 
     SetRect(&g_hint_rc, margin, y, g_total_w - margin, y + S(34));
@@ -509,6 +511,9 @@ static void click_control(HWND hwnd, int i)
         snprintf(g_hint, sizeof g_hint, "Every key and button is back to its default");
         InvalidateRect(hwnd, NULL, FALSE);
         return;
+    case K_HELP:
+        adam_help_show(hwnd, "keypad");
+        return;
     default:
         break;
     }
@@ -707,6 +712,7 @@ void adam_keypad_window_toggle(HWND parent, adamsession *session)
                                   parent, NULL, wc.hInstance, NULL);
         if (!g_panel)
             return;
+        adam_help_set_context(g_panel, "keypad", 0);
         g_theme = OpenThemeData(g_panel, L"BUTTON");
     }
 

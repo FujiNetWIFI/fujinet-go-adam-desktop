@@ -25,6 +25,10 @@ const char *adam_icon_name(void);
 void adam_window_restart_session(AdamWindow *self);
 void adam_window_toast(AdamWindow *self, const char *message);
 
+/* The Help context the main window shows now: "main", or "prefs/Machine"
+ * while Preferences is open. */
+const char *adam_window_help_context(AdamWindow *self);
+
 /* Display-wide CSS, installed once at startup before any window: toggled-on
  * push buttons (class "adam-toggle") and highlighted ones ("adam-accent")
  * in the accent colour with black text, plus "adam-accent-text" (bold accent

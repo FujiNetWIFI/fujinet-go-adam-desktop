@@ -21,6 +21,7 @@ add_executable(fujinet-go-adam-windows WIN32
   keys.c
   keypad/keypad_window.c
   debugger/dbg_window.c
+  help/help_window.c
   resource.rc
 )
 target_link_libraries(fujinet-go-adam-windows PRIVATE

@@ -27,6 +27,7 @@
 #include "adamsession.h"
 #include "debugger/dbg_window.h"
 #include "display.h"
+#include "help/help_window.h"
 #include "keypad/keypad_window.h"
 #include "keys.h"
 #include "resource.h"
@@ -163,6 +164,9 @@ static void show_fujinet_config(void)
 /* ---- console log window -------------------------------------------------- */
 
 #define LOG_TIMER_ID 1
+#define LOG_BAR 34
+#define IDC_LOG_HELP 310
+static HWND g_log_help;
 
 static char g_log_shown[128 * 1024]; /* what the edit control holds now */
 
@@ -170,8 +174,12 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_SIZE:
-        MoveWindow(g_log_edit, 0, 0, LOWORD(lp), HIWORD(lp), TRUE);
+        MoveWindow(g_log_edit, 0, LOG_BAR, LOWORD(lp), HIWORD(lp) > LOG_BAR ? HIWORD(lp) - LOG_BAR : 0, TRUE);
+        if (g_log_help) MoveWindow(g_log_help, LOWORD(lp) - 84, 4, 76, LOG_BAR - 8, TRUE);
         return 0;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDC_LOG_HELP) { adam_help_for(hwnd); return 0; }
+        break;
     case WM_TIMER: {
         static char buf[128 * 1024];
         int n = adamsession_fujinet_copy_log(g_session, buf, sizeof(buf));
@@ -226,6 +234,7 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         DestroyWindow(hwnd);
         g_log_window = NULL;
         g_log_edit = NULL;
+        g_log_help = NULL;
         return 0;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
@@ -264,6 +273,15 @@ static void show_fujinet_log(HINSTANCE inst)
         0, 0, 0, 0, g_log_window, NULL, inst, NULL);
     SendMessageA(g_log_edit, WM_SETFONT,
                  (WPARAM)GetStockObject(ANSI_FIXED_FONT), TRUE);
+    g_log_help = CreateWindowA("BUTTON", "Help", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 10, 10,
+                               g_log_window, (HMENU)(INT_PTR)IDC_LOG_HELP, inst, NULL);
+    SendMessageA(g_log_help, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    adam_help_set_context(g_log_window, "fujilog", 1);
+    {
+        RECT crc;
+        GetClientRect(g_log_window, &crc);
+        SendMessageA(g_log_window, WM_SIZE, 0, MAKELPARAM(crc.right, crc.bottom));
+    }
     g_log_shown[0] = '\0';
     SetTimer(g_log_window, LOG_TIMER_ID, 1000, NULL);
     SendMessageA(g_log_window, WM_TIMER, LOG_TIMER_ID, 0);
@@ -276,6 +294,7 @@ static void show_fujinet_log(HINSTANCE inst)
 #define IDC_CONN_ADDR     302
 #define IDC_CONN_OK       303
 #define IDC_CONN_CANCEL   304
+#define IDC_CONN_HELP     305
 #ifndef EM_SETCUEBANNER
 #define EM_SETCUEBANNER 0x1501
 #endif
@@ -353,6 +372,9 @@ static LRESULT CALLBACK conn_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_CONN_CANCEL:
             conn_close(hwnd);
             return 0;
+        case IDC_CONN_HELP:
+            adam_help_for(hwnd);
+            return 0;
         }
         break;
     case WM_CLOSE:
@@ -416,6 +438,9 @@ static void show_fujinet_connection(HINSTANCE inst)
                "[BOIP] host and port here. 0.0.0.0 accepts connections from "
                "the network; 127.0.0.1 only from this computer.",
                0, 16, 82, 420, 64, 0);
+    conn_child(w, "BUTTON", "Help", BS_PUSHBUTTON | WS_TABSTOP, 16, 166, 80,
+               26, IDC_CONN_HELP);
+    adam_help_set_context(w, "prefs/Connection", 1);
     conn_child(w, "BUTTON", "OK", BS_DEFPUSHBUTTON | WS_TABSTOP, 270, 166, 80,
                26, IDC_CONN_OK);
     conn_child(w, "BUTTON", "Cancel", BS_PUSHBUTTON | WS_TABSTOP, 356, 166,
@@ -506,6 +531,8 @@ static HMENU build_menu(void)
     AppendMenuA(view, MF_STRING, IDM_DEBUGGER, "Debugger\tF12");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)view, "&View");
 
+    AppendMenuA(help, MF_STRING, IDM_HELP, "FujiNet Go Adam &Help\tCtrl+Shift+H");
+    AppendMenuA(help, MF_SEPARATOR, 0, NULL);
     AppendMenuA(help, MF_STRING, IDM_ABOUT, "About FujiNet Go Adam");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     return bar;
@@ -581,6 +608,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_FULLSCREEN: toggle_fullscreen(hwnd); break;
         case IDM_KEYPAD:     open_keypad(); break;
         case IDM_DEBUGGER:   open_debugger(); break;
+        case IDM_HELP: adam_help_for(hwnd); break;
         case IDM_ABOUT: {
             /* MB_USERICON with the app's own icon, not a stock Windows one. */
             MSGBOXPARAMSA mb;
@@ -676,6 +704,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     ShowWindow(g_hwnd, show);
 
     /* Developer affordances, matching the other frontends. */
+    /* F1 is the ADAM's SmartKey I in the window itself */
+    adam_help_set_context(g_hwnd, "main", 0);
     if (getenv("ADAM_OPEN_KEYPAD"))
         open_keypad();
     if (getenv("ADAM_OPEN_DEBUGGER"))
@@ -685,6 +715,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         /* The debugger's F5/F7/F8/F9/F12 accelerators get first refusal
          * while its window (or one of its fields) has the focus. */
         if (adam_debugger_pretranslate(&msg))
+            continue;
+        if (adam_help_pretranslate(&msg))
             continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);

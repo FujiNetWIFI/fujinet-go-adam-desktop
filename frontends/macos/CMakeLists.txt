@@ -18,6 +18,7 @@ add_executable(fujinet-go-adam-macos MACOSX_BUNDLE
   main.m
   AppDelegate.m
   AccentColor.m
+  help/HelpWindow.m
   DisplayView.m
   KeyForward.m
   debugger/DebuggerWindow.m

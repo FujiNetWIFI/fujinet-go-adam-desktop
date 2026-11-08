@@ -53,6 +53,7 @@
 #include <string.h>
 
 #include "accent_button.h"
+#include "../help/help_window.h"
 #include "adamdebug.h"
 #include "resource.h"
 
@@ -109,7 +110,7 @@ static const struct { const char *name, *label; } k_tabs[TAB_COUNT] = {
 
 enum {
     IDC_RUN = 1000, IDC_STEP, IDC_OVER, IDC_OUT, IDC_RUN_TO, IDC_FRAME, IDC_SYMBOLS, IDC_SAVE,
-    IDC_STATUS, IDC_TABS, IDC_TOGGLE_BP,
+    IDC_STATUS, IDC_TABS, IDC_TOGGLE_BP, IDC_HELP_BTN,
     IDC_CON_OUT, IDC_CON_PROMPT, IDC_CON_IN,
     IDC_REG0, IDC_REG_LAST = IDC_REG0 + NREGS - 1,
     IDC_CHK0, IDC_CHK_LAST = IDC_CHK0 + NCHECKS - 1,
@@ -132,7 +133,7 @@ typedef struct {
 
 typedef struct {
     HWND hwnd, tabs;
-    HWND run_btn, step_btn, over_btn, out_btn, run_to_btn, frame_btn, sym_btn, save_btn, status;
+    HWND run_btn, step_btn, over_btn, out_btn, run_to_btn, frame_btn, sym_btn, save_btn, help_btn, status;
 
     /* console */
     HWND con_out, con_prompt, con_in;
@@ -1689,12 +1690,13 @@ static void build_controls(debugger *d)
     d->frame_btn = button(d, "Frame (Shift+F7)", IDC_FRAME);
     d->sym_btn = button(d, "Load Symbols...", IDC_SYMBOLS);
     d->save_btn = button(d, "Save...", IDC_SAVE);
+    d->help_btn = button(d, "Help", IDC_HELP_BTN);
     d->status = child(d, "STATIC", "", SS_RIGHT | SS_ENDELLIPSIS | SS_NOPREFIX, IDC_STATUS, d->ui);
     if (d->ndim < (int)(sizeof d->dim / sizeof d->dim[0])) d->dim[d->ndim++] = d->status;
     {
-        HWND bar[9] = { d->run_btn, d->step_btn, d->over_btn, d->out_btn, d->run_to_btn, d->frame_btn,
-                        d->sym_btn, d->save_btn, d->status };
-        for (i = 0; i < 9; i++) ShowWindow(bar[i], SW_SHOW);
+        HWND bar[10] = { d->run_btn, d->step_btn, d->over_btn, d->out_btn, d->run_to_btn, d->frame_btn,
+                         d->sym_btn, d->save_btn, d->status, d->help_btn };
+        for (i = 0; i < 10; i++) ShowWindow(bar[i], SW_SHOW);
     }
 
     /* Console */
@@ -1799,8 +1801,17 @@ static void build_controls(debugger *d)
     d->fuji_state = view(d, IDC_FUJI_STATE, WS_HSCROLL);
 }
 
+/* Help's contexts (adamhelp.h), one per tab */
+static const char *const k_tab_contexts[] = {
+    "debugger/console", "debugger/cpu", "debugger/disassembly", "debugger/vdp",
+    "debugger/breakpoints", "debugger/io", "debugger/fujinet",
+};
+
 static void show_page(debugger *d, int page)
 {
+    /* Help, F1 and Ctrl+Shift+H open the tab's section */
+    if (page >= 0 && page < (int)(sizeof k_tab_contexts / sizeof k_tab_contexts[0]))
+        adam_help_set_context(d->hwnd, k_tab_contexts[page], 1);
     HWND console[] = { d->con_out, d->con_prompt, d->con_in };
     HWND cpu[] = { d->cpu_hint, d->beam, d->mem_title, d->mem_view, d->goto_label, d->mem_goto, d->mem_back,
                    d->mem_on, d->write_label, d->mem_write };
@@ -1858,8 +1869,11 @@ static void layout(debugger *d)
             x += w + gap + (i == 5 ? S(d, 14) : 0);
         }
         y = S(d, 8) + bh + S(d, 8);
-        if (client.right - S(d, 8) - x >= S(d, 220)) {
-            place(d->status, x, S(d, 8) + (bh - lh) / 2, client.right - S(d, 8) - x, lh);
+        const int hw = btn_w(d, "Help");
+        const int sright = client.right - hw - gap;
+        place(d->help_btn, client.right - S(d, 8) - hw, S(d, 8), hw, bh);
+        if (sright - S(d, 8) - x >= S(d, 220)) {
+            place(d->status, x, S(d, 8) + (bh - lh) / 2, sright - S(d, 8) - x, lh);
         } else {
             place(d->status, S(d, 8), y - S(d, 2), client.right - S(d, 16), lh);
             y += lh + S(d, 4);
@@ -2214,6 +2228,7 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_FRAME: adamdebug_frame(d->dbg, 1); settle_and_sync(d, 1); return 0;
         case IDC_RUN_TO: on_run_to(d); return 0;
         case IDC_TOGGLE_BP: on_toggle_bp(d); return 0;
+        case IDC_HELP_BTN: adam_help_for(d->hwnd); return 0;
         case IDC_SYMBOLS: on_symbols(d); return 0;
         case IDC_SAVE: save_menu(d); return 0;
         case IDC_MEM_BACK: on_mem_page(d, -1); return 0;

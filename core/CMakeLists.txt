@@ -51,6 +51,21 @@ endif()
 include("${ADAMCORE_GEN}/adamcore-sources.cmake")
 adamcore_sources(ADAMCORE_SOURCES ROOT "${ADAMCORE_GEN}")
 
+# The Help, embedded: data/help/help.md as topics of styled spans
+# (core/include/adamhelp.h), which every frontend lays out with its own
+# toolkit. help_data.h declares the table; the build generates it.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(ADAM_HELP_C "${CMAKE_BINARY_DIR}/generated/help_content.c")
+add_custom_command(
+  OUTPUT "${ADAM_HELP_C}"
+  COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/help/make-help.py"
+          --src "${CMAKE_SOURCE_DIR}/data/help/help.md"
+          --out-c "${ADAM_HELP_C}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tools/help/make-help.py"
+          "${CMAKE_SOURCE_DIR}/data/help/help.md"
+  COMMENT "Help"
+  VERBATIM)
+
 add_library(adamsession STATIC
   ${ADAMCORE_SOURCES}
   # session layer
@@ -64,6 +79,8 @@ add_library(adamsession STATIC
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c
+  src/help.c
+  "${ADAM_HELP_C}"
   debugger/debugger.c
   debugger/prompt.c
   debugger/expr.c
@@ -134,6 +151,10 @@ target_include_directories(gamepad_map_test PRIVATE src)
 add_executable(vdp_decode_test tests/vdp_decode_test.c)
 target_link_libraries(vdp_decode_test adamsession)
 
+# The built-in Help covers every setting, key and context.
+add_executable(help_test tests/help_test.c)
+target_link_libraries(help_test adamsession)
+
 add_executable(fujitrace_test tests/fujitrace_test.c)
 target_link_libraries(fujitrace_test adamsession)
 target_include_directories(fujitrace_test PRIVATE debugger)
@@ -147,6 +168,7 @@ add_test(NAME debug_boot COMMAND debug_boot_test)
 add_test(NAME gamepad_map COMMAND gamepad_map_test)
 add_test(NAME vdp_decode COMMAND vdp_decode_test)
 add_test(NAME fujitrace COMMAND fujitrace_test)
+add_test(NAME help COMMAND help_test)
 set_tests_properties(boot_smoke debug_boot gamepad_map
                      PROPERTIES SKIP_RETURN_CODE 77)
 
@@ -157,7 +179,7 @@ set_tests_properties(boot_smoke debug_boot gamepad_map
 if(WIN32)
   foreach(_t input_test boot_smoke dasm_test debug_boot_test
              gamepad_probe gamepad_map_test vdp_decode_test fujitrace_test
-             hostport_test)
+             hostport_test help_test)
     target_link_options(${_t} PRIVATE -static -static-libgcc -static-libstdc++)
   endforeach()
 endif()

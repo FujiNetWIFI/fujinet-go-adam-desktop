@@ -6,6 +6,7 @@
  */
 
 #include "KeypadWindow.h"
+#include "../help/HelpWindow.h"
 
 #include <QFont>
 #include <QGridLayout>
@@ -82,6 +83,7 @@ KeypadWindow::KeypadWindow(adamsession *session, QWidget *parent)
       m_session(session)
 {
     setWindowTitle(QStringLiteral("Controllers"));
+    setProperty("adamHelpContext", QStringLiteral("keypad"));
     setFocusPolicy(Qt::StrongFocus);
 
     auto *root = new QVBoxLayout(this);
@@ -149,6 +151,7 @@ KeypadWindow::KeypadWindow(adamsession *session, QWidget *parent)
     maprow->addWidget(m_clearButton);
     maprow->addWidget(defaults);
     maprow->addWidget(m_hint, 1);
+    maprow->addWidget(adamHelpButton(QStringLiteral("keypad")));
     root->addLayout(maprow);
 
     connect(&m_pollTimer, &QTimer::timeout, this, &KeypadWindow::poll);
