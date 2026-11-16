@@ -18,7 +18,7 @@
 find_package(Git QUIET)
 
 # Pinned commits, kept in step with the submodule gitlinks (verified below).
-set(ADAMCORE_COMMIT "bc44e1271a41e63729cc2fd4ed337d32fafbe2a2")
+set(ADAMCORE_COMMIT "813632b67aa5491ffb1d224e5b09d0e8dc779e67")
 set(ADAMCORE_URL "https://github.com/tschak909/adamcore")
 # FujiNet pin: 4add1daa8 + the BoIP idle-wait fix (fujinet-firmware PR #2247,
 # = master f703133d0 + the fix). Temporary: move back to master when #2247
