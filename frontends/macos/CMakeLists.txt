@@ -22,6 +22,7 @@ add_executable(fujinet-go-adam-macos MACOSX_BUNDLE
   DisplayView.m
   KeyForward.m
   debugger/DebuggerWindow.m
+  debugger/VideoTab.m
   keypad/KeypadWindow.m
   ${MACOS_ICON}
 )
