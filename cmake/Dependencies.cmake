@@ -117,6 +117,27 @@ function(adam_provide_dependency)
         OUTPUT_VARIABLE _head OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET RESULT_VARIABLE _rc)
       if(_rc EQUAL 0 AND NOT _head STREQUAL DEP_COMMIT)
+        # A clean checkout that lags the pin (a CI workspace or a developer
+        # tree that outlived a re-pin) is moved to the gitlink commit; one
+        # with local edits is left alone.
+        execute_process(
+          COMMAND ${GIT_EXECUTABLE} -C "${_path}" status --porcelain
+          OUTPUT_VARIABLE _dirty OUTPUT_STRIP_TRAILING_WHITESPACE
+          ERROR_QUIET)
+        if(NOT _dirty)
+          message(STATUS "${DEP_NAME}: moving ${_head} to the pin ${DEP_COMMIT}")
+          execute_process(
+            COMMAND ${GIT_EXECUTABLE} submodule update --init
+                    --filter=blob:none -- "${DEP_PATH}"
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            RESULT_VARIABLE _moved ERROR_QUIET)
+          execute_process(
+            COMMAND ${GIT_EXECUTABLE} -C "${_path}" rev-parse HEAD
+            OUTPUT_VARIABLE _head OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        endif()
+      endif()
+      if(_rc EQUAL 0 AND NOT _head STREQUAL DEP_COMMIT)
         message(STATUS
           "${DEP_NAME}: checkout is ${_head}, pinned ${DEP_COMMIT} "
           "(cmake/Dependencies.cmake)")
