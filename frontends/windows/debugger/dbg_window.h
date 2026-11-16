@@ -1,6 +1,6 @@
 /*
- * The Win32 debugger window over the ADAM Z80 / VDP debugger engine
- * (adamdebug.h).
+ * The Win32 debugger window over the Adam Z80 / VDP debugger engine
+ * (adamdebug.h, adamvidtab.h).
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
