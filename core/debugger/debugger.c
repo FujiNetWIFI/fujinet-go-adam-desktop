@@ -48,6 +48,7 @@
 #include "../src/compat.h"
 #include "../src/session_internal.h"
 #include "debugger_internal.h"
+#include "adamvidtab.h"
 #include "expr.h"
 #include "fujitrace.h"
 #include "z80dasm.h"
@@ -1037,6 +1038,7 @@ adamdebug *adamsession_debugger(adamsession *s)
             symtabs_load_text(&d->syms, adamdebug_builtin_os7_sym, "os7");
             symtabs_load_text(&d->syms, adamdebug_builtin_eos_sym, "eos");
             s->debugger = d;
+            adamvid_tab_register_console(d); /* the console `video` command */
         }
     }
     pthread_mutex_unlock(&s->lifecycle_mtx);

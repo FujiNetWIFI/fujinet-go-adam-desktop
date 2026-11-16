@@ -187,6 +187,7 @@ int main(void)
     has("io", "not running");
     has("cart", "no machine");
     has("sound", "no machine");
+    adamdebug_set_video_text(NULL);
     has("video", "no video state yet");
     has("regs", "PC=0000");
     has("mem", "usage");

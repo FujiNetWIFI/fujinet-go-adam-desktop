@@ -472,9 +472,9 @@ list, and activating a row goes to that address.
 <!-- context: debugger/fujinet -->
 ## FujiNet packets
 
-Every FujiBus packet on the cartridge's link, SLIP-decoded, both ways, with hex,
-recorded from the moment the machine starts. **Clear** empties the list. Beside
-it is the FujiNet cartridge's state.
+Every AdamNet packet FujiNet sees over BoIP, both ways, with hex, recorded from
+the moment the machine starts. **Clear** empties the list. Beside it is the
+state of the FujiNet link.
 
 # Files and folders
 
