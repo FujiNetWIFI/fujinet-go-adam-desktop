@@ -19,6 +19,7 @@ set(GNOME_SOURCES
   help/help_window.c
   keypad/keypad_window.c
   debugger/dbg_window.c
+  debugger/dbg_video.c
 )
 
 set(GNOME_APP_ID online.fujinet.go.adam.gnome)
