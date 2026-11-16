@@ -550,6 +550,89 @@ static int phase_cv(adamsession *s, adamdebug *d, const char *dir)
         adamdebug_trace_enable(d, 0);
     }
 
+    /* the newer family API on the same machine: the stop in words, access
+     * breakpoints, old/value conditions, hits, history, the machine getters */
+    {
+        adamdebug_snapshot snap;
+        adamdebug_stop_info info;
+        adamdebug_region map[12];
+        adamdebug_io iostate;
+        adamdebug_sound snd;
+        adamdebug_trace rows[8];
+        char text[200];
+
+        adamdebug_breakpoint_clear(d);
+        adamdebug_cpu_set(d, ADAM_REG_PC, 0x802B);
+        id = adamdebug_breakpoint_add(d, ADAMDEBUG_BP_WRITE, 0x6000, 0x6000, "value > old", err, sizeof err);
+        check(id > 0, "newer: a write breakpoint on value > old");
+        check(run_until_stop(d, 3000), "newer: it stops");
+        adamdebug_stop_snapshot(d, &snap);
+        check(snap.paused && snap.stop.reason == ADAMDEBUG_STOP_WATCH_WRITE && snap.stop.addr == 0x6000 &&
+              snap.stop.bp_id == id && snap.stop.pc == 0x8034 && snap.stop.from_pc == 0x8033 &&
+              snap.stop.old_value >= 0 && snap.stop.value == snap.stop.old_value + 1,
+              "newer: the stop info says what was written over what, and from where");
+        snprintf(text, sizeof text, "wrote $6000 = $%02X (was $%02X) at $8034", snap.stop.value, snap.stop.old_value);
+        check(strcmp(snap.text, text) == 0 && snap.address == 0x8034, "newer: the stop in words");
+        adamdebug_stop_text(d, text, sizeof text, &i);
+        check(strcmp(text, snap.text) == 0 && i == 0x8034, "newer: stop_text agrees with the snapshot");
+        check(adamdebug_eval(d, "value - old", &v, err, sizeof err) == 0 && v == 1,
+              "newer: value and old are named at a watch stop");
+        adamdebug_breakpoint_clear(d);
+        id = adamdebug_breakpoint_add(d, ADAMDEBUG_BP_ACCESS, 0x6000, 0x6000, NULL, err, sizeof err);
+        check(id > 0, "newer: an access breakpoint");
+        /* the PC is after the store: the load of the same byte comes first */
+        check(run_until_stop(d, 3000) && adamdebug_last_stop(d, &info) && info.reason == ADAMDEBUG_STOP_WATCH_READ &&
+              info.old_value == info.value, "newer: it stops on the load");
+        check(run_until_stop(d, 3000) && adamdebug_last_stop(d, &info) && info.reason == ADAMDEBUG_STOP_WATCH_WRITE,
+              "newer: and on the next store");
+        adamdebug_breakpoint_list(d, list, 8);
+        check(list[0].hits == 2 && list[0].type == ADAMDEBUG_BP_ACCESS, "newer: one entry counts both");
+        adamdebug_breakpoint_clear_hits(d);
+        adamdebug_breakpoint_list(d, list, 8);
+        check(list[0].hits == 0, "newer: hit counts clear");
+        check(adamdebug_breakpoint_set_condition(d, id, "value == 3", err, sizeof err) &&
+              !adamdebug_breakpoint_set_condition(d, id, "value ==", err, sizeof err),
+              "newer: a condition is replaced, and a broken one refused");
+        adamdebug_breakpoint_clear(d);
+
+        check(adamdebug_register_set(d, "ixh", 0x12, err, sizeof err) == 1 &&
+              adamdebug_register_set(d, "ixl", 0x34, err, sizeof err) == 1 &&
+              adamdebug_eval(d, "ix", &v, err, sizeof err) == 0 && v == 0x1234, "newer: ixh and ixl");
+        check(adamdebug_memory_map(d, map, 12) == 5 && map[0].low == 0 && map[4].high == 0xFFFF &&
+              strstr(map[4].name, "Cartridge"), "newer: the memory map, gap-free at both ends");
+        check(adamdebug_io_get(d, &iostate) && iostate.valid && iostate.mem_ctrl == 0x0F && iostate.cv_console, "newer: io_get");
+        adamdebug_io_state(d, out, sizeof out);
+        check(strstr(out, "Controllers") && strstr(out, "VDP") && strstr(out, "CPU") && strstr(out, "FujiNet"),
+              "newer: io text carries the machine state");
+        check(adamdebug_sound_get(d, &snd) && snd.sn.present, "newer: the sound getter");
+
+        adamdebug_history_enable(d, 1);
+        adamdebug_cpu_set(d, ADAM_REG_PC, 0x802B);
+        STEPPED(d, adamdebug_step(d));
+        STEPPED(d, adamdebug_step(d));
+        check(adamdebug_history_copy(d, rows, 8) == 2 && rows[0].pc == 0x802B && rows[1].pc == 0x802D,
+              "newer: history holds the instructions that ran, oldest first");
+        adamdebug_history_enable(d, 0);
+        adamdebug_history_clear(d);
+
+        adamdebug_command(d, "bpa $6000", out, sizeof out);
+        adamdebug_command(d, "hits", out, sizeof out);
+        check(strstr(out, "rw") != NULL, "newer: bpa and hits at the console");
+        adamdebug_command(d, "hits clear", out, sizeof out);
+        adamdebug_command(d, "clear", out, sizeof out);
+        adamdebug_command(d, "map", out, sizeof out);
+        check(strstr(out, "$0000-$1FFF  OS7 ROM") && strstr(out, "Cartridge"), "newer: map lists the regions");
+        adamdebug_command(d, "symbols PUT_VRAM", out, sizeof out);
+        check(strstr(out, "PUT_VRAM") != NULL, "newer: symbols filters the labels");
+        adamdebug_command(d, "set ixh 7", out, sizeof out);
+        adamdebug_command(d, "print ixh", out, sizeof out);
+        check(strstr(out, "$0007") != NULL, "newer: set ixh at the console");
+        adamdebug_command(d, "cart", out, sizeof out);
+        check(strstr(out, "ColecoVision") != NULL, "newer: cart");
+        adamdebug_clear_symbols(d);
+        check(adamdebug_label_address(d, "RST0") == 0, "newer: clearing symbols leaves the built-ins");
+    }
+
     /* Save */
     {
         static const struct { const char *kind; long size; } kinds[] = {
@@ -716,6 +799,22 @@ static int phase_adam(adamsession *s, adamdebug *d)
     adamdebug_io_state(d, out, sizeof out);
     check(strstr(out, "ADAM") != NULL, "ADAM: the memory map text");
     check(adamdebug_label_address(d, "EOS_FILL_VRAM") == 0xFD26, "ADAM: built-in EOS symbols");
+    {
+        adamdebug_region map[12];
+        adamdebug_cart cart;
+        adamdebug_io iostate;
+        int regions = adamdebug_memory_map(d, map, 12), gap = regions > 0 && map[0].low == 0 && map[regions - 1].high == 0xFFFF;
+        for (i = 1; i < regions; i++)
+            if ((unsigned)map[i - 1].high + 1 != map[i].low) gap = 0;
+        check(gap, "ADAM: the memory map is gap-free from $0000 to $FFFF");
+        adamdebug_cart_info(d, &cart);
+        check(cart.valid && !cart.cv_console && !strcmp(cart.machine, "ADAM") && !cart.cartridge,
+              "ADAM: cart info says ADAM, no cartridge");
+        adamdebug_io_get(d, &iostate);
+        check(iostate.valid && !iostate.cv_console && iostate.mem_ctrl == m.mem_ctrl, "ADAM: io_get matches the memory map");
+        adamdebug_io_state(d, out, sizeof out);
+        check(strstr(out, "Controllers") && strstr(out, "FujiNet"), "ADAM: the io text");
+    }
 
     /* a real stop address is steppable and disassembles */
     {

@@ -12,8 +12,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
+#include "adammemtools.h"
 #include "debugger_internal.h"
+
+#define WAIT_MS 1500
 
 typedef struct {
     char *dst;
@@ -35,10 +39,11 @@ static void out(outbuf *o, const char *fmt, ...)
 
 static const char *const commands[] = {
     "help", "step", "over", "out", "run", "go", "stop", "runto", "scanline",
-    "frame", "break", "bp", "bpr", "bpw", "bpin", "bpout", "delete", "enable",
-    "disable", "clear", "breaks", "print", "regs", "set", "mem", "dump",
-    "poke", "vram", "vpoke", "vdp", "io", "map", "fujinet", "label", "labels",
-    "symbols", "disasm", "dis", "trace", "save", NULL,
+    "frame", "break", "bp", "bpr", "bpw", "bpa", "bpin", "bpout", "delete",
+    "enable", "disable", "clear", "hits", "breaks", "print", "regs", "set",
+    "mem", "dump", "poke", "vram", "vpoke", "vdp", "io", "map", "cart",
+    "sound", "video", "fujinet", "label", "labels", "symbols", "disasm", "dis",
+    "trace", "watch", "unwatch", "find", "save", NULL,
 };
 
 static const char *help_text =
@@ -49,25 +54,33 @@ static const char *help_text =
     "runto <addr>           run until PC = addr\n"
     "scanline [n] | frame [n]   n beam lines / frames\n"
     "break <addr>[-<end>] [cond]     execute breakpoint (alias bp)\n"
-    "bpr | bpw <addr>[-<end>] [cond] read / write breakpoint\n"
+    "bpr | bpw | bpa <addr>[-<end>] [cond]   read / write / read-or-write\n"
     "bpin | bpout <port>[-<end>] [cond]  I/O breakpoint\n"
     "delete <id|addr> | enable <id> | disable <id> | clear | breaks\n"
+    "hits [clear]           the breakpoints with their hit counts / zero them\n"
     "print <expr>           e.g. print hl, print [$6000], print {sp}\n"
     "regs                   CPU registers\n"
-    "set <reg> <expr>       e.g. set pc $8024, set zf 1, set af' 0\n"
+    "set <reg> <expr>       e.g. set pc $8024, set zf 1, set af' 0, set ixh 5\n"
     "mem <addr> [len]       dump memory (side-effect free; alias dump)\n"
     "poke <addr> <v...>     write memory\n"
     "vram <addr> [len] | vpoke <addr> <v...> | vdp\n"
-    "io (alias map)         the memory map, ports and VDP registers\n"
+    "map                    the memory map, region by region\n"
+    "io                     the memory map, ports, controllers, VDP, CPU, FujiNet\n"
+    "cart | sound           the cartridge and memory config / the sound chips\n"
+    "video [section]        the Video tab as text\n"
     "fujinet                the FujiNet link\n"
-    "label <addr> <name> | labels [file] (alias symbols)\n"
+    "label <addr> <name> | labels [file]    set a label / load a symbol file\n"
+    "symbols [text]         the labels, filtered by name\n"
     "disasm [addr] [n]      (alias dis)\n"
     "trace [on|off|clear|n] record / show the last n instructions\n"
+    "watch [expr|lo-hi] | unwatch <n|all>   the watch list\n"
+    "find [hex] <bytes> | find text <string>   search memory (stopped)\n"
     "save <dis|mem|vram|regs> <file>\n"
-    "Numbers: $C000 0xC000 C000h 49152 %1010; registers a..l af..iy sp pc\n"
-    "i r im iff1 iff2 af' bc' de' hl'; flags cf nf pf hf zf sf yf xf; [addr]\n"
-    "{addr}; labels; line frame cycles; in a condition, value and addr; C\n"
-    "operators.\n";
+    "Numbers: $C000 0xC000 C000h 49152 %1010 (a bare 1-4 digit address is hex\n"
+    "unless it is a label); registers a..l af..iy sp pc i r im iff1 iff2 af'\n"
+    "bc' de' hl' ixh ixl iyh iyl; flags cf nf pf hf zf sf yf xf; [addr] {addr};\n"
+    "labels; line frame cycles vline vdpaddr vdpsecond; in a condition value,\n"
+    "old and addr; C operators. Tab completes.\n";
 
 static char *next_tok(char **p)
 {
@@ -104,17 +117,30 @@ static int eval(adamdebug *d, outbuf *o, const char *text, long *v)
     return 0;
 }
 
+/* An address argument: a bare token of 1-4 hex digits is hex unless it names
+ * a label (as in the memory fields); anything else is an expression. */
+static int eval_addr(adamdebug *dbg, outbuf *buf, const char *text, long *val)
+{
+    size_t len = strlen(text), idx;
+    for (idx = 0; idx < len && isxdigit((unsigned char)text[idx]); idx++) {}
+    if (len >= 1 && len <= 4 && idx == len && adamdebug_label_address(dbg, text) < 0) {
+        *val = strtol(text, NULL, 16);
+        return 0;
+    }
+    return eval(dbg, buf, text, val);
+}
+
 /* "<addr>" or "<addr>-<end>" */
 static int range(adamdebug *d, outbuf *o, char *tok, long *a, long *b)
 {
     char *dash = strchr(tok + 1, '-');
     if (dash) {
         *dash = '\0';
-        if (eval(d, o, tok, a) || eval(d, o, dash + 1, b))
+        if (eval_addr(d, o, tok, a) || eval_addr(d, o, dash + 1, b))
             return -1;
         return 0;
     }
-    if (eval(d, o, tok, a))
+    if (eval_addr(d, o, tok, a))
         return -1;
     *b = *a;
     return 0;
@@ -153,37 +179,10 @@ static void dump(outbuf *o, uint16_t addr, const uint8_t *b, int n)
     }
 }
 
-static int reg_by_name(const char *n)
-{
-    static const struct { const char *name; int reg; } map[] = {
-        {"pc", ADAM_REG_PC}, {"sp", ADAM_REG_SP}, {"af", ADAM_REG_AF},
-        {"bc", ADAM_REG_BC}, {"de", ADAM_REG_DE}, {"hl", ADAM_REG_HL},
-        {"ix", ADAM_REG_IX}, {"iy", ADAM_REG_IY}, {"af'", ADAM_REG_AF2},
-        {"bc'", ADAM_REG_BC2}, {"de'", ADAM_REG_DE2}, {"hl'", ADAM_REG_HL2},
-        {"i", ADAM_REG_I}, {"r", ADAM_REG_R}, {"im", ADAM_REG_IM},
-        {"iff1", ADAM_REG_IFF1}, {"iff2", ADAM_REG_IFF2}, {"a", ADAM_REG_A},
-        {"f", ADAM_REG_F}, {"b", ADAM_REG_B}, {"c", ADAM_REG_C},
-        {"d", ADAM_REG_D}, {"e", ADAM_REG_E}, {"h", ADAM_REG_H},
-        {"l", ADAM_REG_L}, {"sf", ADAM_FLAG_S}, {"zf", ADAM_FLAG_Z},
-        {"hf", ADAM_FLAG_H}, {"pf", ADAM_FLAG_PV}, {"nf", ADAM_FLAG_N},
-        {"cf", ADAM_FLAG_C},
-    };
-    char low[8];
-    size_t i;
-
-    for (i = 0; n[i] && i + 1 < sizeof low; i++)
-        low[i] = (char)tolower((unsigned char)n[i]);
-    low[i] = '\0';
-    for (i = 0; i < sizeof map / sizeof map[0]; i++)
-        if (!strcmp(map[i].name, low))
-            return map[i].reg;
-    return -1;
-}
-
 static void list_breaks(adamdebug *d, outbuf *o)
 {
-    adamdebug_breakpoint bp[128];
-    int n = adamdebug_breakpoint_list(d, bp, 128), i;
+    adamdebug_breakpoint bp[ADAMDEBUG_MAX_BREAKPOINTS];
+    int n = adamdebug_breakpoint_list(d, bp, ADAMDEBUG_MAX_BREAKPOINTS), i;
     if (!n) {
         out(o, "no breakpoints\n");
         return;
@@ -235,8 +234,9 @@ static void add_bp(adamdebug *d, outbuf *o, int type, char *args, int io)
  * breakpoint starting there. Returns the count (up to max). */
 static int bp_ids(adamdebug *d, outbuf *o, char *tok, int *ids, int max)
 {
-    adamdebug_breakpoint bp[128];
-    int n = adamdebug_breakpoint_list(d, bp, 128), i, count = 0;
+    adamdebug_breakpoint bp[ADAMDEBUG_MAX_BREAKPOINTS];
+    int n = adamdebug_breakpoint_list(d, bp, ADAMDEBUG_MAX_BREAKPOINTS), i,
+        count = 0;
     long v;
 
     if (tok[0] == '#')
@@ -295,10 +295,41 @@ static void run_cmd(adamdebug *d, outbuf *o, const char *cmd, long n, long v)
         adamdebug_scanline(d, (int)n);
     else
         adamdebug_frame(d, (int)n);
-    if (adamdebug_wait_stop(d, gen, 250))
+    if (adamdebug_wait_stop(d, gen, WAIT_MS))
         show_stop(d, o);
     else
         out(o, "running\n");
+}
+
+static void show_sound(adamdebug *dbg, outbuf *buf)
+{
+    adamdebug_sound sound;
+    int idx;
+
+    if (!adamdebug_sound_get(dbg, &sound)) {
+        out(buf, "no machine\n");
+        return;
+    }
+    out(buf, "SN76489: latched register %d\n", sound.sn.latched_reg);
+    for (idx = 0; idx < 3; idx++)
+        out(buf, "  tone %d: period %4d (%.1f Hz)  attenuation %2d  level %2d\n", idx + 1,
+            sound.sn.period[idx], sound.sn.freq[idx], sound.sn.atten[idx], sound.sn.level[idx]);
+    out(buf, "  noise: %s, rate %d (%.1f Hz)  attenuation %2d  level %2d\n",
+        sound.sn.noise_white ? "white" : "periodic", sound.sn.noise_rate, sound.sn.noise_hz,
+        sound.sn.atten[3], sound.sn.level[3]);
+    if (sound.ay.present) {
+        out(buf, "AY-3-8910 (Super Game Module): register %X\n  ", sound.ay.addr);
+        for (idx = 0; idx < 16; idx++)
+            out(buf, " R%X=%02X", idx, sound.ay.reg[idx]);
+        out(buf, "\n");
+        for (idx = 0; idx < 3; idx++)
+            out(buf, "  %c: period %4d (%.1f Hz)%s%s level %d%s\n", 'A' + idx,
+                sound.ay.period[idx], sound.ay.freq[idx], sound.ay.tone_on[idx] ? " tone" : "",
+                sound.ay.noise_on[idx] ? " noise" : "", sound.ay.level[idx],
+                sound.ay.envelope[idx] ? " envelope" : "");
+        out(buf, "  noise %d  envelope %d shape %X\n", sound.ay.noise_period,
+            sound.ay.env_period, sound.ay.env_shape);
+    }
 }
 
 int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
@@ -341,13 +372,16 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
             show_stop(d, &o);
         } else {
             adamdebug_stop(d);
-            if (adamdebug_wait_stop(d, gen, 250))
+            if (adamdebug_wait_stop(d, gen, WAIT_MS))
                 show_stop(d, &o);
         }
     } else if (!strcmp(cmd, "runto")) {
         char *t = next_tok(&p);
-        if (!t || eval(d, &o, t, &v))
+        if (!t || eval_addr(d, &o, t, &v)) {
+            if (!t)
+                out(&o, "usage: runto <addr>\n");
             return o.len;
+        }
         run_cmd(d, &o, "runto", 1, v);
     } else if (!strcmp(cmd, "scanline") || !strcmp(cmd, "frame")) {
         char *t = next_tok(&p);
@@ -361,6 +395,8 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
         add_bp(d, &o, ADAMDEBUG_BP_READ, p, 0);
     } else if (!strcmp(cmd, "bpw")) {
         add_bp(d, &o, ADAMDEBUG_BP_WRITE, p, 0);
+    } else if (!strcmp(cmd, "bpa")) {
+        add_bp(d, &o, ADAMDEBUG_BP_ACCESS, p, 0);
     } else if (!strcmp(cmd, "bpin")) {
         add_bp(d, &o, ADAMDEBUG_BP_IN, p, 1);
     } else if (!strcmp(cmd, "bpout")) {
@@ -386,6 +422,14 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
         }
     } else if (!strcmp(cmd, "clear")) {
         adamdebug_breakpoint_clear(d);
+    } else if (!strcmp(cmd, "hits")) {
+        char *t = next_tok(&p);
+        if (t && !strcmp(t, "clear")) {
+            adamdebug_breakpoint_clear_hits(d);
+            out(&o, "hit counts cleared\n");
+        } else {
+            list_breaks(d, &o);
+        }
     } else if (!strcmp(cmd, "breaks") || !strcmp(cmd, "bl")) {
         list_breaks(d, &o);
     } else if (!strcmp(cmd, "print") || !strcmp(cmd, "p")) {
@@ -401,14 +445,17 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
         show_regs(d, &o);
     } else if (!strcmp(cmd, "set")) {
         char *r = next_tok(&p);
-        int reg = r ? reg_by_name(r) : -1;
-        if (reg < 0) {
+        char err[160];
+        if (!r || !*rest_of(p)) {
             out(&o, "usage: set <reg> <expr>\n");
         } else if (eval(d, &o, rest_of(p), &v) == 0) {
             if (!adamdebug_is_stopped(d)) {
                 out(&o, "the machine is running (stop first)\n");
+            } else if (!adamdebug_register_set(d, r, v, err, sizeof err)) {
+                out(&o, "error: %s\n", err);
             } else {
-                adamdebug_cpu_set(d, reg, (int)v);
+                if (err[0])
+                    out(&o, "note: %s\n", err);
                 show_regs(d, &o);
             }
         }
@@ -417,7 +464,11 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
         char *t = next_tok(&p), *l = next_tok(&p);
         uint8_t buf[256];
         w = 64;
-        if (!t || eval(d, &o, t, &v) || (l && eval(d, &o, l, &w)))
+        if (!t) {
+            out(&o, "usage: %s <addr> [len]\n", cmd);
+            return o.len;
+        }
+        if (eval_addr(d, &o, t, &v) || (l && eval(d, &o, l, &w)))
             return o.len;
         if (w > 256)
             w = 256;
@@ -431,7 +482,11 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
     } else if (!strcmp(cmd, "poke") || !strcmp(cmd, "vpoke")) {
         char *t = next_tok(&p), *b;
         int n = 0;
-        if (!t || eval(d, &o, t, &v))
+        if (!t) {
+            out(&o, "usage: %s <addr> <val...>\n", cmd);
+            return o.len;
+        }
+        if (eval_addr(d, &o, t, &v))
             return o.len;
         while ((b = next_tok(&p)) != NULL) {
             if (eval(d, &o, b, &w))
@@ -455,24 +510,63 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
             out(&o, "%s", text);
             free(s);
         }
-    } else if (!strcmp(cmd, "io") || !strcmp(cmd, "map")) {
-        char text[2048];
+    } else if (!strcmp(cmd, "io")) {
+        char text[4096];
         adamdebug_io_state(d, text, sizeof text);
         out(&o, "%s", text);
+    } else if (!strcmp(cmd, "map")) {
+        adamdebug_region map[16];
+        const int count = adamdebug_memory_map(d, map, 16);
+        int i;
+        if (!count)
+            out(&o, "the machine is not running\n");
+        for (i = 0; i < count; i++)
+            out(&o, "$%04X-$%04X  %s%s%s\n", map[i].low, map[i].high, map[i].name,
+                map[i].readable ? "" : " (no read)",
+                map[i].writable ? "" : " (read only)");
+    } else if (!strcmp(cmd, "cart")) {
+        char text[512];
+        adamdebug_cart_summary(d, text, sizeof text);
+        out(&o, "%s\n", text);
+    } else if (!strcmp(cmd, "sound")) {
+        show_sound(d, &o);
+    } else if (!strcmp(cmd, "video")) {
+        const char *(*hook)(const char *section) = adamdebug_video_text_hook();
+        char *section = next_tok(&p);
+        const char *text = hook ? hook(section ? section : "") : NULL;
+        if (text && *text)
+            out(&o, "%s", text);
+        else
+            out(&o, "no video state yet\n");
     } else if (!strcmp(cmd, "fujinet")) {
         char text[2048];
         adamdebug_fujinet_state(d, text, sizeof text);
         out(&o, "%s", text);
     } else if (!strcmp(cmd, "label")) {
         char *t = next_tok(&p), *n = next_tok(&p);
-        if (!t || eval(d, &o, t, &v))
+        if (!t || !n || eval_addr(d, &o, t, &v)) {
+            if (!t || !n)
+                out(&o, "usage: label <addr> <name>\n");
             return o.len;
+        }
         adamdebug_set_label(d, (uint16_t)v, n);
-    } else if (!strcmp(cmd, "labels") || !strcmp(cmd, "symbols")) {
+        out(&o, "$%04lX = %s\n", (unsigned long)v & 0xffff, n);
+    } else if (!strcmp(cmd, "labels")) {
         char msg[300];
         char *f = rest_of(p);
         adamdebug_load_symbols(d, *f ? f : NULL, msg, sizeof msg);
         out(&o, "%s\n", msg);
+    } else if (!strcmp(cmd, "symbols")) {
+        int picks[40], count, i;
+        count = adamdebug_symbols_filter(d, rest_of(p), picks, 40);
+        if (!count)
+            out(&o, "no labels match\n");
+        for (i = 0; i < count; i++) {
+            uint16_t addr;
+            char name[64];
+            if (adamdebug_symbols_get(d, picks[i], &addr, name, sizeof name))
+                out(&o, "$%04X  %s\n", addr, name);
+        }
     } else if (!strcmp(cmd, "disasm") || !strcmp(cmd, "dis") ||
                !strcmp(cmd, "d")) {
         char *t = next_tok(&p), *n = next_tok(&p);
@@ -482,7 +576,7 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
         adamdebug_cpu_get(d, &cp);
         v = cp.pc;
         w = 16;
-        if ((t && eval(d, &o, t, &v)) || (n && eval(d, &o, n, &w)))
+        if ((t && eval_addr(d, &o, t, &v)) || (n && eval(d, &o, n, &w)))
             return o.len;
         if (w > 64)
             w = 64;
@@ -528,6 +622,52 @@ int adamdebug_command(adamdebug *d, const char *command, char *dst, int dstsz)
                     tr[i].sp);
             }
         }
+    } else if (!strcmp(cmd, "watch")) {
+        char *text = rest_of(p);
+        int i;
+        if (*text && adamwatch_add(text) < 0)
+            out(&o, "no room for another watch\n");
+        if (!adamwatch_count())
+            out(&o, "no watches (watch <addr|label|lo-hi>)\n");
+        for (i = 0; i < adamwatch_count(); i++) {
+            char row[160];
+            adamwatch_format(d, i, row, sizeof row);
+            out(&o, "%2d  %s\n", i, row);
+        }
+    } else if (!strcmp(cmd, "unwatch")) {
+        char *t = next_tok(&p);
+        if (!t)
+            out(&o, "unwatch <n|all>\n");
+        else if (!strcmp(t, "all"))
+            adamwatch_clear();
+        else if (eval(d, &o, t, &v) == 0)
+            adamwatch_remove((int)v);
+    } else if (!strcmp(cmd, "find")) {
+        char *t = next_tok(&p);
+        char joined[200];
+        int kind = ADAMSEARCH_HEX, count = 0, flags = 0, found, i;
+        uint8_t pat[ADAMSEARCH_MAX], mask;
+        uint16_t hits[32];
+        if (t && !strcmp(t, "text")) {
+            kind = ADAMSEARCH_TEXT;
+            t = rest_of(p);
+        } else if (t && !strcmp(t, "hex")) {
+            t = rest_of(p);
+        } else if (t) {
+            snprintf(joined, sizeof joined, "%s %s", t, rest_of(p));
+            t = joined;
+        }
+        if (!t || !*t || !adamsearch_parse(kind, t, pat, &count, &mask, &flags)) {
+            out(&o, "find [hex] <bytes> | find text <string>\n");
+            return o.len;
+        }
+        found = adamdebug_search(d, pat, count, mask, flags, 0, 0xFFFF, hits, 32);
+        if (found < 0)
+            out(&o, "stop the machine first\n");
+        else if (!found)
+            out(&o, "not found\n");
+        for (i = 0; i < found; i++)
+            out(&o, "$%04X\n", hits[i]);
     } else if (!strcmp(cmd, "save")) {
         char *k = next_tok(&p);
         char *f = rest_of(p);

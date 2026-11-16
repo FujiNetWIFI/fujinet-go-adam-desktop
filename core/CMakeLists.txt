@@ -92,6 +92,14 @@ add_library(adamsession STATIC
   ${ROMS_EMBEDDED_C}
 )
 
+# ---- ENGINE agent: machine state getters, watches/search tools ---------------
+target_sources(adamsession PRIVATE debugger/iostate.c debugger/memtools.c)
+# ---- end ENGINE agent ---------------------------------------------------------
+
+# ---- VIDEO agent: the Video tab (controller, capture, tests) ----------------
+target_sources(adamsession PRIVATE debugger/vidtab.c src/vidcap.c)
+# ---- end VIDEO agent ---------------------------------------------------------
+
 target_include_directories(adamsession
   PUBLIC include "${ADAMCORE_GEN}/include"
   PRIVATE src "${ADAMCORE_GEN}/src"
@@ -171,6 +179,50 @@ add_test(NAME fujitrace COMMAND fujitrace_test)
 add_test(NAME help COMMAND help_test)
 set_tests_properties(boot_smoke debug_boot gamepad_map
                      PROPERTIES SKIP_RETURN_CODE 77)
+
+# ---- ENGINE agent: tests ------------------------------------------------------
+add_executable(expr_test tests/expr_test.c)
+target_link_libraries(expr_test adamsession)
+target_include_directories(expr_test PRIVATE debugger)
+add_executable(prompt_test tests/prompt_test.c)
+target_link_libraries(prompt_test adamsession)
+target_include_directories(prompt_test PRIVATE debugger)
+add_executable(memtools_test tests/memtools_test.c)
+target_link_libraries(memtools_test adamsession)
+target_include_directories(memtools_test PRIVATE debugger)
+add_executable(engine_test tests/engine_test.c)
+target_link_libraries(engine_test adamsession)
+target_include_directories(engine_test PRIVATE src debugger)
+add_test(NAME expr COMMAND expr_test)
+add_test(NAME prompt COMMAND prompt_test)
+add_test(NAME memtools COMMAND memtools_test)
+add_test(NAME engine COMMAND engine_test)
+set_tests_properties(prompt engine PROPERTIES SKIP_RETURN_CODE 77)
+if(WIN32)
+  foreach(_t expr_test prompt_test memtools_test engine_test)
+    target_link_options(${_t} PRIVATE -static -static-libgcc -static-libstdc++)
+  endforeach()
+endif()
+# ---- end ENGINE agent ---------------------------------------------------------
+
+# ---- VIDEO agent: tests -----------------------------------------------------
+add_executable(vidtab_test tests/vidtab_test.c)
+target_link_libraries(vidtab_test adamsession)
+add_executable(vidtab_live_test tests/vidtab_live_test.c)
+target_link_libraries(vidtab_live_test adamsession)
+target_include_directories(vidtab_live_test PRIVATE src)
+add_test(NAME vidtab COMMAND vidtab_test)
+add_test(NAME vidtab_env COMMAND vidtab_test env)
+set_tests_properties(vidtab_env PROPERTIES ENVIRONMENT
+  "ADAM_DEBUGGER_VIDEO_VIEW=beam;ADAM_DEBUGGER_VIDEO_SOURCE=palette;ADAM_DEBUGGER_VIDEO_OVERLAYS=grid,splits;ADAM_DEBUGGER_VIDEO_ZOOM=4;ADAM_DEBUGGER_VIDEO_SECTION=timing")
+add_test(NAME vidtab_live COMMAND vidtab_live_test)
+set_tests_properties(vidtab_live PROPERTIES SKIP_RETURN_CODE 77)
+if(WIN32)
+  foreach(_t vidtab_test vidtab_live_test)
+    target_link_options(${_t} PRIVATE -static -static-libgcc -static-libstdc++)
+  endforeach()
+endif()
+# ---- end VIDEO agent ---------------------------------------------------------
 
 # On Windows the tests that start threads otherwise need libwinpthread-1.dll
 # beside them, which only happens to be true inside an MSYS2 shell. Link the

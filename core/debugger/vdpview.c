@@ -29,14 +29,29 @@ static void put_rgba(uint8_t *dst, uint16_t rgb565)
     dst[3] = 0xFF;
 }
 
+/* Graphics II is M3 alone: the core gives Text (M1) and then Multicolor (M2)
+ * priority over it, and so do the views. */
 static int mode_graphics2(const adamvdp_snapshot *s)
 {
-    return (s->regs[0] & 0x02) != 0;
+    return (s->regs[0] & 0x02) != 0 && !(s->regs[1] & 0x18);
 }
 
 static int mode_text(const adamvdp_snapshot *s)
 {
     return (s->regs[1] & 0x10) != 0;
+}
+
+static int mode_multicolor(const adamvdp_snapshot *s)
+{
+    return (s->regs[1] & 0x08) != 0;
+}
+
+/* The colour index the display shows for the backdrop: the core draws a
+ * transparent (0) backdrop as black (1). */
+static int backdrop_index(const adamvdp_snapshot *s)
+{
+    int idx = s->regs[7] & 0x0F;
+    return idx ? idx : 1;
 }
 
 /* ---- table / register decoding -------------------------------------------- */
@@ -421,8 +436,16 @@ void adamvdp_render_nametable(const adamvdp_snapshot *s, uint8_t *rgba)
                                 : (uint16_t)(s->regs[3] << 6);
     const uint16_t pg_mask = (uint16_t)(((s->regs[4] & 0x03) << 8) | 0xFF);
     const uint16_t ct_mask = (uint16_t)(((s->regs[3] & 0x7F) << 3) | 0x07);
-    const uint16_t backdrop = s->palette565[s->regs[7] & 0x0F];
+    const uint16_t backdrop = s->palette565[backdrop_index(s)];
     int row, col, y, x;
+
+    if (!(s->regs[1] & 0x40)) {
+        /* Display blanked: every line is the backdrop. */
+        for (y = 0; y < 192; y++)
+            for (x = 0; x < 256; x++)
+                put_rgba(rgba + (y * 256 + x) * 4, backdrop);
+        return;
+    }
 
     if (mode_text(s)) {
         /* 40x24 text: 6-pixel glyphs, fixed colors from R7 (fg color 0
@@ -446,6 +469,28 @@ void adamvdp_render_nametable(const adamvdp_snapshot *s, uint8_t *rgba)
                         if (px >= 256) continue;
                         put_rgba(rgba + (py * 256 + px) * 4,
                                  (bits & (0x80 >> x)) ? fg : backdrop);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    if (mode_multicolor(s)) {
+        /* Multicolor: 4x4 blocks. A name selects 8 bytes of the pattern
+         * table; row&3 picks the pair, the half of the cell picks the byte,
+         * and its two nibbles are the left and right block colours. */
+        for (row = 0; row < 24; row++) {
+            for (col = 0; col < 32; col++) {
+                uint8_t name = s->vram[(nt + row * 32 + col) & 0x3FFF];
+                for (y = 0; y < 8; y++) {
+                    uint8_t byte = s->vram[(((s->regs[4] & 0x07) << 11) + name * 8 +
+                                            (row & 3) * 2 + (y >> 2)) & 0x3FFF];
+                    uint8_t left = (uint8_t)(byte >> 4), right = (uint8_t)(byte & 0x0F);
+                    for (x = 0; x < 8; x++) {
+                        uint8_t colour_idx = x < 4 ? left : right;
+                        put_rgba(rgba + ((row * 8 + y) * 256 + col * 8 + x) * 4,
+                                 colour_idx ? s->palette565[colour_idx] : backdrop);
                     }
                 }
             }

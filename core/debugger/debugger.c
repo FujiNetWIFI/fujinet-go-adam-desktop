@@ -14,7 +14,7 @@
  *     step-over/out/run-to/scanline target, the trace ring, or a watchpoint):
  *     it returns nonzero to stop BEFORE the instruction at the PC;
  *   - a watchpoint: the bus hook (installed only with an enabled READ, WRITE,
- *     IN or OUT breakpoint) records the hit in `pending`, and the exec hook
+ *     IN or OUT breakpoint) records the hit in `pend`, and the exec hook
  *     stops the machine at the next instruction boundary, so it stops AFTER
  *     the accessing instruction. READ ignores opcode/operand fetches.
  * Detached, every breakpoint and both hooks are taken out of the core and the
@@ -41,6 +41,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
 
 #include "adamcore_debug.h"
 #include "../src/compat.h"
@@ -50,9 +52,27 @@
 #include "fujitrace.h"
 #include "z80dasm.h"
 
-#define MAX_BP  128
-#define TRACE_N 4096
+#define MAX_BP  ADAMDEBUG_MAX_BREAKPOINTS
+#define TRACE_RING_LEN ADAMDEBUG_TRACE_SIZE /* power of two */
 #define SLICE   4096 /* instructions between looks at the stop request */
+
+/* The raw ring record: registers as they were BEFORE the instruction, the
+ * four bytes at pc. The instruction is decoded when a record is read. */
+typedef struct {
+    uint16_t pc, sp, af, bc, de, hl, ix, iy, af2, bc2, de2, hl2;
+    uint8_t reg_i, reg_r, im, iff, halted;
+    uint8_t bytes[4];
+    uint64_t cycles;
+    uint32_t repeat;
+    int16_t line;
+} ring_rec;
+
+/* A watch that fired during an instruction, waiting for the boundary. */
+typedef struct {
+    int active;
+    adamdebug_stop_info info;
+    char why[64]; /* the terse wording of adamdebug_stop_reason */
+} pending_hit;
 
 enum { ACT_RUN = 0, ACT_STEP, ACT_OVER, ACT_OUT, ACT_RUNTO, ACT_SCANLINE,
        ACT_FRAME };
@@ -79,6 +99,9 @@ struct adamdebug {
     char reason[128];
     int reason_addr;
     unsigned generation;
+    /* The current stop, in the same critical section as `stopped`. */
+    adamdebug_stop_info stop;
+    uint64_t serial;
 
     void (*stop_cb)(void *ud, int kind, uint16_t pc);
     void *stop_ud;
@@ -99,24 +122,27 @@ struct adamdebug {
 
     /* Hook-private: emulation thread only. */
     int skip;                /* the exec hook's first call is the released instruction */
-    int pending;             /* a watchpoint fired during the instruction */
-    char pend_reason[128];
-    int hook_kind;
-    char hook_why[128];
-    int tr_last;
+    pending_hit pend;        /* a watchpoint fired during the instruction */
+    int hook_kind;           /* what the exec hook stopped for ... */
+    adamdebug_stop_info hook_info;
+    char hook_why[64];       /* ... and the terse wording */
+    uint16_t cur_pc;         /* the instruction being executed (exec hook) */
 
     /* The expression context (mtx held while evaluating). */
     adamcore_z80_regs rs;
     const adamcore *ec;
-    long acc_value, acc_addr;
+    long acc_value, acc_addr, acc_old;
     int in_access;
 
+    /* The instruction history: trace and history share one ring, allocated on
+     * the first enable. */
     pthread_mutex_t trace_mtx;
-    int trace_on;
-    adamdebug_trace ring[TRACE_N];
-    int ring_head, ring_count;
+    int trace_on, history_want;
+    ring_rec *ring;
+    uint64_t ring_total;
 
     sym_tables syms;
+    unsigned sym_gen;
 
     /* FujiNet packet trace, fed on the emulator thread by adamcore's BoIP
      * hook. Its own lock, so the wire never waits on a UI holding mtx. */
@@ -161,9 +187,154 @@ void adamdebug_touch(adamdebug *d)
 const char *const adamdebug_reg_names[] = {
     "a", "f", "b", "c", "d", "e", "h", "l", "af", "bc", "de", "hl", "ix", "iy",
     "sp", "pc", "i", "r", "im", "iff1", "iff2", "af'", "bc'", "de'", "hl'",
-    "cf", "nf", "pf", "hf", "zf", "sf", "yf", "xf", "halted", "line", "frame",
-    "cycles", "value", "addr", NULL,
+    "ixh", "ixl", "iyh", "iyl",
+    "cf", "nf", "pf", "hf", "zf", "sf", "yf", "xf", "halted", "line", "vline",
+    "frame", "cycles", "value", "addr", "old", "vdpaddr", "vdpsecond", NULL,
 };
+
+static const char *(*g_video_text)(const char *section);
+
+/* ---- registers by name (set / register_set) ---------------------------------- */
+
+enum {
+    R_A, R_F, R_B, R_C, R_D, R_E, R_H, R_L,
+    R_AF, R_BC, R_DE, R_HL, R_IX, R_IY, R_SP, R_PC,
+    R_AF2, R_BC2, R_DE2, R_HL2,
+    R_IXH, R_IXL, R_IYH, R_IYL,
+    R_I, R_R, R_IM, R_IFF1, R_IFF2,
+    R_FLAG_S, R_FLAG_Z, R_FLAG_Y, R_FLAG_H, R_FLAG_X, R_FLAG_P, R_FLAG_N,
+    R_FLAG_C
+};
+
+static const struct {
+    const char *name;
+    int code;
+} k_regs[] = {
+    { "a", R_A }, { "f", R_F }, { "b", R_B }, { "c", R_C }, { "d", R_D },
+    { "e", R_E }, { "h", R_H }, { "l", R_L },
+    { "af", R_AF }, { "bc", R_BC }, { "de", R_DE }, { "hl", R_HL },
+    { "ix", R_IX }, { "iy", R_IY }, { "sp", R_SP }, { "pc", R_PC },
+    { "af'", R_AF2 }, { "bc'", R_BC2 }, { "de'", R_DE2 }, { "hl'", R_HL2 },
+    { "ixh", R_IXH }, { "ixl", R_IXL }, { "iyh", R_IYH }, { "iyl", R_IYL },
+    { "i", R_I }, { "r", R_R }, { "im", R_IM }, { "iff1", R_IFF1 },
+    { "iff2", R_IFF2 },
+    { "sf", R_FLAG_S }, { "zf", R_FLAG_Z }, { "yf", R_FLAG_Y },
+    { "hf", R_FLAG_H }, { "xf", R_FLAG_X }, { "pf", R_FLAG_P },
+    { "nf", R_FLAG_N }, { "cf", R_FLAG_C },
+};
+#define NUM_REGS ((int)(sizeof(k_regs) / sizeof(k_regs[0])))
+
+static void lower_copy(char *dst, int dstsz, const char *src)
+{
+    int idx = 0;
+    while (src[idx] && idx + 1 < dstsz) {
+        dst[idx] = (char)tolower((unsigned char)src[idx]);
+        idx++;
+    }
+    dst[idx] = '\0';
+}
+
+static int reg_code(const char *name)
+{
+    char low[16];
+    int idx;
+    lower_copy(low, (int)sizeof low, name);
+    for (idx = 0; idx < NUM_REGS; idx++)
+        if (!strcmp(low, k_regs[idx].name))
+            return k_regs[idx].code;
+    return -1;
+}
+
+static unsigned flag_mask(int code)
+{
+    switch (code) {
+    case R_FLAG_S: return 0x80;
+    case R_FLAG_Z: return 0x40;
+    case R_FLAG_Y: return 0x20;
+    case R_FLAG_H: return 0x10;
+    case R_FLAG_X: return 0x08;
+    case R_FLAG_P: return 0x04;
+    case R_FLAG_N: return 0x02;
+    default:       return 0x01;
+    }
+}
+
+static long reg_value(const adamcore_z80_regs *regs, int code)
+{
+    switch (code) {
+    case R_A: return regs->a;
+    case R_F: return regs->f;
+    case R_B: return regs->b;
+    case R_C: return regs->c;
+    case R_D: return regs->d;
+    case R_E: return regs->e;
+    case R_H: return regs->h;
+    case R_L: return regs->l;
+    case R_AF: return (regs->a << 8) | regs->f;
+    case R_BC: return (regs->b << 8) | regs->c;
+    case R_DE: return (regs->d << 8) | regs->e;
+    case R_HL: return (regs->h << 8) | regs->l;
+    case R_IX: return regs->ix;
+    case R_IY: return regs->iy;
+    case R_SP: return regs->sp;
+    case R_PC: return regs->pc;
+    case R_AF2: return (regs->a2 << 8) | regs->f2;
+    case R_BC2: return (regs->b2 << 8) | regs->c2;
+    case R_DE2: return (regs->d2 << 8) | regs->e2;
+    case R_HL2: return (regs->h2 << 8) | regs->l2;
+    case R_IXH: return regs->ix >> 8;
+    case R_IXL: return regs->ix & 0xFF;
+    case R_IYH: return regs->iy >> 8;
+    case R_IYL: return regs->iy & 0xFF;
+    case R_I: return regs->i;
+    case R_R: return regs->r;
+    case R_IM: return regs->im;
+    case R_IFF1: return regs->iff1;
+    case R_IFF2: return regs->iff2;
+    default: return (regs->f & flag_mask(code)) != 0;
+    }
+}
+
+static void reg_store(adamcore_z80_regs *regs, int code, long value)
+{
+    const uint8_t byte = (uint8_t)value;
+    const uint16_t word = (uint16_t)value;
+    switch (code) {
+    case R_A: regs->a = byte; break;
+    case R_F: regs->f = byte; break;
+    case R_B: regs->b = byte; break;
+    case R_C: regs->c = byte; break;
+    case R_D: regs->d = byte; break;
+    case R_E: regs->e = byte; break;
+    case R_H: regs->h = byte; break;
+    case R_L: regs->l = byte; break;
+    case R_AF: regs->a = (uint8_t)(word >> 8); regs->f = (uint8_t)word; break;
+    case R_BC: regs->b = (uint8_t)(word >> 8); regs->c = (uint8_t)word; break;
+    case R_DE: regs->d = (uint8_t)(word >> 8); regs->e = (uint8_t)word; break;
+    case R_HL: regs->h = (uint8_t)(word >> 8); regs->l = (uint8_t)word; break;
+    case R_IX: regs->ix = word; break;
+    case R_IY: regs->iy = word; break;
+    case R_SP: regs->sp = word; break;
+    case R_PC: regs->pc = word; break;
+    case R_AF2: regs->a2 = (uint8_t)(word >> 8); regs->f2 = (uint8_t)word; break;
+    case R_BC2: regs->b2 = (uint8_t)(word >> 8); regs->c2 = (uint8_t)word; break;
+    case R_DE2: regs->d2 = (uint8_t)(word >> 8); regs->e2 = (uint8_t)word; break;
+    case R_HL2: regs->h2 = (uint8_t)(word >> 8); regs->l2 = (uint8_t)word; break;
+    case R_IXH: regs->ix = (uint16_t)((regs->ix & 0x00FF) | (byte << 8)); break;
+    case R_IXL: regs->ix = (uint16_t)((regs->ix & 0xFF00) | byte); break;
+    case R_IYH: regs->iy = (uint16_t)((regs->iy & 0x00FF) | (byte << 8)); break;
+    case R_IYL: regs->iy = (uint16_t)((regs->iy & 0xFF00) | byte); break;
+    case R_I: regs->i = byte; break;
+    case R_R: regs->r = byte; break;
+    case R_IM: regs->im = (uint8_t)value; break;
+    case R_IFF1: regs->iff1 = (uint8_t)value; break;
+    case R_IFF2: regs->iff2 = (uint8_t)value; break;
+    default:
+        if (value) regs->f |= (uint8_t)flag_mask(code);
+        else       regs->f &= (uint8_t)~flag_mask(code);
+        break;
+    }
+}
 
 static uint8_t expr_read(void *user, uint16_t addr)
 {
@@ -178,40 +349,52 @@ static int expr_name(void *user, const char *name, long *out)
     char n[16];
     size_t i;
     uint16_t addr;
+    int code;
 
     for (i = 0; name[i] && i + 1 < sizeof n; i++)
         n[i] = (char)((name[i] >= 'A' && name[i] <= 'Z') ? name[i] + 32 : name[i]);
     n[i] = '\0';
     if (name[i]) n[0] = '\0'; /* too long to be a register */
 
-    if (!strcmp(n, "value") || !strcmp(n, "addr")) {
+    if (!strcmp(n, "value") || !strcmp(n, "addr") || !strcmp(n, "old")) {
         if (!d->in_access)
             return 0;
-        *out = n[0] == 'v' ? d->acc_value : d->acc_addr;
+        *out = n[0] == 'v' ? d->acc_value : n[0] == 'a' ? d->acc_addr : d->acc_old;
         return 1;
     }
-#define REG(s, v) if (!strcmp(n, s)) { *out = (v); return 1; }
-    REG("a", r->a) REG("f", r->f) REG("b", r->b) REG("c", r->c)
-    REG("d", r->d) REG("e", r->e) REG("h", r->h) REG("l", r->l)
-    REG("af", (r->a << 8) | r->f) REG("bc", (r->b << 8) | r->c)
-    REG("de", (r->d << 8) | r->e) REG("hl", (r->h << 8) | r->l)
-    REG("ix", r->ix) REG("iy", r->iy) REG("sp", r->sp) REG("pc", r->pc)
-    REG("i", r->i) REG("r", r->r) REG("im", r->im)
-    REG("iff1", r->iff1) REG("iff2", r->iff2)
-    REG("af'", (r->a2 << 8) | r->f2) REG("bc'", (r->b2 << 8) | r->c2)
-    REG("de'", (r->d2 << 8) | r->e2) REG("hl'", (r->h2 << 8) | r->l2)
-    REG("cf", r->f & 1) REG("nf", (r->f >> 1) & 1) REG("pf", (r->f >> 2) & 1)
-    REG("yf", (r->f >> 5) & 1) REG("xf", (r->f >> 3) & 1)
-    REG("hf", (r->f >> 4) & 1) REG("zf", (r->f >> 6) & 1)
-    REG("sf", (r->f >> 7) & 1)
-    REG("halted", r->halted) REG("cycles", (long)r->cycles)
-#undef REG
-    if (!strcmp(n, "line") || !strcmp(n, "frame")) {
+    code = n[0] ? reg_code(n) : -1;
+    if (code >= 0) {
+        *out = reg_value(r, code);
+        return 1;
+    }
+    if (!strcmp(n, "halted")) {
+        *out = r->halted;
+        return 1;
+    }
+    if (!strcmp(n, "cycles")) {
+        *out = (long)r->cycles;
+        return 1;
+    }
+    if (!strcmp(n, "line") || !strcmp(n, "vline") || !strcmp(n, "frame")) {
         int line = 0;
         uint64_t frame = 0;
         if (d->ec)
             adamcore_debug_beam(d->ec, &line, &frame);
-        *out = n[0] == 'l' ? line : (long)frame;
+        *out = n[0] == 'f' ? (long)frame : line;
+        return 1;
+    }
+    if (!strcmp(n, "vdpaddr") || !strcmp(n, "vdpsecond")) {
+        /* the VDP's host side as it is right now: inside the bus hook that is
+         * before an OUT lands, which is what a Break-on-writes condition wants */
+        uint8_t vregs[8], vstatus;
+        uint16_t vaddr = 0;
+        adamcore_vdp_latch latch;
+        memset(&latch, 0, sizeof latch);
+        if (d->ec) {
+            adamcore_vdp_state(d->ec, vregs, &vstatus, &vaddr);
+            adamcore_vdp_latch_state(d->ec, &latch);
+        }
+        *out = n[3] == 'a' ? vaddr : latch.latched;
         return 1;
     }
     if (symtabs_find(&d->syms, name, &addr)) {
@@ -245,10 +428,20 @@ int adamdebug_eval(adamdebug *d, const char *text, long *value, char *err,
                    int errsz)
 {
     int rc;
+    long scratch;
+    if (err && errsz > 0) err[0] = '\0';
     if (!d) return -1;
     pthread_mutex_lock(&d->mtx);
     d->in_access = 0;
-    rc = eval_locked(d, text, value, err, errsz);
+    if (d->stopped && d->stop.reason >= ADAMDEBUG_STOP_WATCH_READ &&
+        d->stop.reason <= ADAMDEBUG_STOP_WATCH_OUT) {
+        d->in_access = 1;
+        d->acc_addr = d->stop.addr;
+        d->acc_value = d->stop.value < 0 ? 0 : d->stop.value;
+        d->acc_old = d->stop.old_value < 0 ? d->acc_value : d->stop.old_value;
+    }
+    rc = eval_locked(d, text, value ? value : &scratch, err, errsz);
+    d->in_access = 0;
     pthread_mutex_unlock(&d->mtx);
     return rc;
 }
@@ -298,129 +491,166 @@ static void rebuild_locked(adamdebug *d)
 
 /* ---- the trace ring --------------------------------------------------------- */
 
+static int want_ring(const adamdebug *d)
+{
+    return d->trace_on || d->history_want;
+}
+
 static void trace_record(adamdebug *d, adamcore *c, uint16_t pc)
 {
-    adamdebug_trace *t;
     adamcore_z80_regs r;
-    uint8_t code[4];
-    z80d_insn ins;
+    ring_rec rec;
     int line = 0;
 
     adamcore_get_regs(c, &r);
-    adamcore_peek_block(c, pc, code, 4);
-    z80_disassemble(&ins, pc, code);
+    memset(&rec, 0, sizeof rec);
+    rec.pc = pc;
+    rec.sp = r.sp;
+    rec.af = (uint16_t)((r.a << 8) | r.f);
+    rec.bc = (uint16_t)((r.b << 8) | r.c);
+    rec.de = (uint16_t)((r.d << 8) | r.e);
+    rec.hl = (uint16_t)((r.h << 8) | r.l);
+    rec.ix = r.ix;
+    rec.iy = r.iy;
+    rec.af2 = (uint16_t)((r.a2 << 8) | r.f2);
+    rec.bc2 = (uint16_t)((r.b2 << 8) | r.c2);
+    rec.de2 = (uint16_t)((r.d2 << 8) | r.e2);
+    rec.hl2 = (uint16_t)((r.h2 << 8) | r.l2);
+    rec.reg_i = r.i;
+    rec.reg_r = r.r;
+    rec.im = r.im;
+    rec.iff = (uint8_t)((r.iff1 ? 1 : 0) | (r.iff2 ? 2 : 0));
+    rec.halted = r.halted;
+    rec.cycles = r.cycles;
+    adamcore_peek_block(c, pc, rec.bytes, 4);
     adamcore_debug_beam(c, &line, NULL);
+    rec.line = (int16_t)line;
 
     pthread_mutex_lock(&d->trace_mtx);
-    t = &d->ring[d->ring_head];
-    t->pc = pc;
-    t->sp = r.sp;
-    t->af = (uint16_t)((r.a << 8) | r.f);
-    t->bc = (uint16_t)((r.b << 8) | r.c);
-    t->de = (uint16_t)((r.d << 8) | r.e);
-    t->hl = (uint16_t)((r.h << 8) | r.l);
-    t->len = ins.len;
-    memcpy(t->bytes, ins.bytes, 4);
-    t->cycles = r.cycles;
-    t->line = (int16_t)line;
-    d->ring_head = (d->ring_head + 1) % TRACE_N;
-    if (d->ring_count < TRACE_N)
-        d->ring_count++;
+    if (d->ring) {
+        /* A CPU already in HALT spins on the same pc every four cycles: one
+         * record with a count, not a flood that scrolls everything away. */
+        if (rec.halted && d->ring_total > 0) {
+            ring_rec *last =
+                &d->ring[(d->ring_total - 1) & (TRACE_RING_LEN - 1)];
+            if (last->halted && last->pc == pc) {
+                last->repeat++;
+                pthread_mutex_unlock(&d->trace_mtx);
+                return;
+            }
+        }
+        d->ring[d->ring_total & (TRACE_RING_LEN - 1)] = rec;
+        d->ring_total++;
+    }
     pthread_mutex_unlock(&d->trace_mtx);
-    d->tr_last = pc;
 }
 
 /* ---- the hooks (emulation thread) ------------------------------------------- */
 
+static void info_clear(adamdebug_stop_info *info, int reason)
+{
+    memset(info, 0, sizeof *info);
+    info->reason = reason;
+    info->value = info->old_value = info->from_pc = -1;
+}
+
+/* A stop returns BEFORE the instruction runs: it is not recorded as if it
+ * had; the instruction is recorded when it runs after the release. */
 static int exec_hook(void *ud, adamcore *c, uint16_t pc)
 {
     adamdebug *d = ud;
     const int first = d->skip;
 
     d->skip = 0;
-    if (d->trace_on && !(first && d->tr_last == pc))
+    d->cur_pc = pc;
+    if (!first) {
+        if (d->pend.active) {
+            d->hook_info = d->pend.info;
+            snprintf(d->hook_why, sizeof d->hook_why, "%s", d->pend.why);
+            d->hook_kind = ADAMDBG_STOP_WATCH;
+            d->pend.active = 0;
+            return 1;
+        }
+        switch (d->act) {
+        case ACT_OVER:
+        case ACT_OUT:
+        case ACT_RUNTO:
+            if (pc == d->target) {
+                adamcore_z80_regs r;
+                if (d->act == ACT_RUNTO) {
+                    info_clear(&d->hook_info, ADAMDEBUG_STOP_ONESHOT);
+                    snprintf(d->hook_why, sizeof d->hook_why, "run to");
+                    d->hook_kind = ADAMDBG_STOP_RUNTO;
+                    return 1;
+                }
+                adamcore_get_regs(c, &r);
+                if (d->act == ACT_OVER ? (r.sp >= d->sp_guard && !r.halted)
+                                       : r.sp > d->sp_guard) {
+                    info_clear(&d->hook_info, ADAMDEBUG_STOP_ONESHOT);
+                    snprintf(d->hook_why, sizeof d->hook_why,
+                             d->act == ACT_OVER ? "step over" : "step out");
+                    d->hook_kind = ADAMDBG_STOP_STEP;
+                    return 1;
+                }
+            }
+            break;
+        case ACT_SCANLINE: {
+            int line = 0;
+            adamcore_debug_beam(c, &line, NULL);
+            if (line != d->last_line) {
+                d->last_line = line;
+                if (--d->count <= 0) {
+                    info_clear(&d->hook_info, ADAMDEBUG_STOP_SCANLINE);
+                    snprintf(d->hook_why, sizeof d->hook_why, "scanline");
+                    d->hook_kind = ADAMDBG_STOP_STEP;
+                    return 1;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    if (want_ring(d))
         trace_record(d, c, pc);
-    if (first)
-        return 0; /* the instruction the machine was released at */
-
-    if (d->pending) {
-        d->pending = 0;
-        snprintf(d->hook_why, sizeof d->hook_why, "%s", d->pend_reason);
-        d->hook_kind = ADAMDBG_STOP_WATCH;
-        return 1;
-    }
-    switch (d->act) {
-    case ACT_OVER:
-    case ACT_OUT:
-    case ACT_RUNTO:
-        if (pc == d->target) {
-            adamcore_z80_regs r;
-            if (d->act == ACT_RUNTO) {
-                snprintf(d->hook_why, sizeof d->hook_why, "run to");
-                d->hook_kind = ADAMDBG_STOP_RUNTO;
-                return 1;
-            }
-            adamcore_get_regs(c, &r);
-            if (d->act == ACT_OVER ? (r.sp >= d->sp_guard && !r.halted)
-                                   : r.sp > d->sp_guard) {
-                snprintf(d->hook_why, sizeof d->hook_why,
-                         d->act == ACT_OVER ? "step over" : "step out");
-                d->hook_kind = ADAMDBG_STOP_STEP;
-                return 1;
-            }
-        }
-        break;
-    case ACT_SCANLINE: {
-        int line = 0;
-        adamcore_debug_beam(c, &line, NULL);
-        if (line != d->last_line) {
-            d->last_line = line;
-            if (--d->count <= 0) {
-                snprintf(d->hook_why, sizeof d->hook_why, "scanline");
-                d->hook_kind = ADAMDBG_STOP_STEP;
-                return 1;
-            }
-        }
-        break;
-    }
-    default:
-        break;
-    }
     return 0;
 }
 
 static void bus_hook(void *ud, int kind, uint16_t addr, uint8_t val)
 {
     adamdebug *d = ud;
-    int type, i, io = 0;
+    int type, reason, i, io = 0;
 
     switch (kind) {
     case ADAMCORE_BUS_MEM_R:
         type = ADAMDEBUG_BP_READ;
+        reason = ADAMDEBUG_STOP_WATCH_READ;
         if (!(d->map_mem[addr] & type)) return;
         break;
     case ADAMCORE_BUS_MEM_W:
         type = ADAMDEBUG_BP_WRITE;
+        reason = ADAMDEBUG_STOP_WATCH_WRITE;
         if (!(d->map_mem[addr] & type)) return;
         break;
     case ADAMCORE_BUS_IO_R:
         type = ADAMDEBUG_BP_IN;
+        reason = ADAMDEBUG_STOP_WATCH_IN;
         io = 1;
         if (!(d->map_io[addr & 0xFF] & type)) return;
         break;
     case ADAMCORE_BUS_IO_W:
         type = ADAMDEBUG_BP_OUT;
+        reason = ADAMDEBUG_STOP_WATCH_OUT;
         io = 1;
         if (!(d->map_io[addr & 0xFF] & type)) return;
         break;
     default:
         return;
     }
-    if (d->pending)
-        return; /* the first hit in an instruction is the one reported */
     if (type == ADAMDEBUG_BP_READ) {
-        /* the fetches of the instruction itself go through the same bus:
-         * the byte just fetched is at PC-1 */
+        /* the fetches of the instruction itself go through the same bus: the
+         * byte just fetched is at PC-1, which is not a data read */
         adamcore_z80_regs r;
         adamcore_get_regs(core_of(d), &r);
         if ((uint16_t)(r.pc - 1) == addr)
@@ -430,50 +660,70 @@ static void bus_hook(void *ud, int kind, uint16_t addr, uint8_t val)
         addr &= 0xFF;
 
     pthread_mutex_lock(&d->mtx);
-    d->acc_value = val;
-    d->acc_addr = addr;
-    d->in_access = 1;
-    for (i = 0; i < d->nbp; i++) {
-        const adamdebug_breakpoint *b = &d->bp[i];
-        if (b->enabled && (b->type & type) && addr >= b->start &&
-            addr <= b->end && cond_true_locked(d, b)) {
-            d->bp[i].hits++;
-            if (io)
-                snprintf(d->pend_reason, sizeof d->pend_reason,
-                         "%s $%02X %s $%02X",
-                         type == ADAMDEBUG_BP_IN ? "in" : "out", addr,
-                         type == ADAMDEBUG_BP_IN ? "->" : "<-", val);
-            else
-                snprintf(d->pend_reason, sizeof d->pend_reason,
-                         "%s $%04X = $%02X",
-                         type == ADAMDEBUG_BP_READ ? "read" : "write", addr,
-                         val);
-            d->pending = 1;
-            break;
+    {
+        adamdebug_stop_info access;
+        adamcore *c = core_of(d);
+
+        info_clear(&access, reason);
+        access.addr = addr;
+        access.value = val;
+        /* a write hook fires BEFORE the store: the old byte is still there */
+        access.old_value = kind == ADAMCORE_BUS_MEM_W && c
+                               ? adamcore_peek(c, addr)
+                               : (kind == ADAMCORE_BUS_IO_W ? -1 : val);
+        access.from_pc = d->cur_pc;
+        d->acc_value = val;
+        d->acc_addr = addr;
+        d->acc_old = access.old_value < 0 ? val : access.old_value;
+        d->in_access = 1;
+        for (i = 0; i < d->nbp; i++) {
+            adamdebug_breakpoint *b = &d->bp[i];
+            if (!b->enabled || !(b->type & type) || addr < b->start ||
+                addr > b->end || !cond_true_locked(d, b))
+                continue;
+            b->hits++;
+            if (!d->pend.active) {
+                d->pend.active = 1;
+                d->pend.info = access;
+                d->pend.info.bp_id = b->id;
+                if (io)
+                    snprintf(d->pend.why, sizeof d->pend.why,
+                             "%s $%02X %s $%02X",
+                             type == ADAMDEBUG_BP_IN ? "in" : "out", addr,
+                             type == ADAMDEBUG_BP_IN ? "->" : "<-", val);
+                else
+                    snprintf(d->pend.why, sizeof d->pend.why,
+                             "%s $%04X = $%02X",
+                             type == ADAMDEBUG_BP_READ ? "read" : "write",
+                             addr, val);
+            }
         }
+        d->in_access = 0;
     }
-    d->in_access = 0;
     pthread_mutex_unlock(&d->mtx);
 }
 
-/* An enabled execute breakpoint at pc whose condition holds. */
+/* The enabled execute breakpoints at pc whose conditions hold; the first
+ * one's id, or 0. Counts a hit on each. mtx held. */
 static int exec_hit_locked(adamdebug *d, uint16_t pc)
 {
-    int i, hit = 0;
+    int i, first = 0;
 
     d->acc_addr = pc;
     d->acc_value = peek(d, pc);
+    d->acc_old = d->acc_value;
     d->in_access = 1;
     for (i = 0; i < d->nbp; i++) {
         adamdebug_breakpoint *b = &d->bp[i];
         if (b->enabled && (b->type & ADAMDEBUG_BP_EXEC) && pc >= b->start &&
             pc <= b->end && cond_true_locked(d, b)) {
             b->hits++;
-            hit = 1;
+            if (!first)
+                first = b->id;
         }
     }
     d->in_access = 0;
-    return hit;
+    return first;
 }
 
 /* ---- keeping the core in step with the engine ------------------------------- */
@@ -502,7 +752,7 @@ static void sync_core_locked(adamdebug *d, adamcore *c)
             adamcore_set_bus_hook(c, NULL, NULL);
             d->hook_exec = d->hook_bus = 0;
             d->core_dirty = 0;
-            d->pending = 0;
+            d->pend.active = 0;
             pthread_cond_broadcast(&d->evcv);
         }
         update_engagement_locked(d);
@@ -516,7 +766,7 @@ static void sync_core_locked(adamdebug *d, adamcore *c)
                 adamcore_bp_set(c, (uint16_t)a);
         d->armed_epoch = d->epoch;
     }
-    want_exec = d->trace_on || d->nwatch > 0 ||
+    want_exec = want_ring(d) || d->nwatch > 0 ||
                 (!d->stopped && (d->act == ACT_OVER || d->act == ACT_OUT ||
                                  d->act == ACT_RUNTO ||
                                  d->act == ACT_SCANLINE));
@@ -547,7 +797,7 @@ void adamdebug_on_core_created(adamsession *s)
     pthread_mutex_lock(&d->mtx);
     d->armed_core = NULL;
     d->stopped = 0;
-    d->pending = 0;
+    d->pend.active = 0;
     d->next1 = NEXT_FIRST;
     if (d->attached)
         d->stop_req = 1;
@@ -571,6 +821,7 @@ void adamdebug_clear_core(adamsession *s)
     d->armed_core = NULL;
     d->core_dirty = 0;
     d->stopped = 0;
+    d->pend.active = 0;
     update_engagement_locked(d);
     bump_locked(d);
     pthread_mutex_unlock(&d->mtx);
@@ -578,8 +829,11 @@ void adamdebug_clear_core(adamsession *s)
 
 /* ---- the emulation thread's frame driver ------------------------------------ */
 
-/* Park (mtx held; drops it around the callback). */
-static void park_locked(adamdebug *d, adamcore *c, const char *reason,
+/* Park (mtx held; drops it around the callback). `info` is the stop in
+ * words, `why` the terse wording of adamdebug_stop_reason. One critical
+ * section makes stopped, the stop, its serial and the generation agree. */
+static void park_locked(adamdebug *d, adamcore *c,
+                        const adamdebug_stop_info *info, const char *why,
                         int kind)
 {
     adamcore_z80_regs r;
@@ -587,11 +841,17 @@ static void park_locked(adamdebug *d, adamcore *c, const char *reason,
     void *ud;
 
     adamcore_get_regs(c, &r);
-    snprintf(d->reason, sizeof d->reason, "%s", reason);
+    snprintf(d->reason, sizeof d->reason, "%s", why);
     d->reason_addr = r.pc;
+    d->stop = *info;
+    if (d->stop.reason < ADAMDEBUG_STOP_WATCH_READ ||
+        d->stop.reason > ADAMDEBUG_STOP_WATCH_OUT)
+        d->stop.addr = r.pc;
+    d->stop.pc = r.pc;
+    d->stop.serial = ++d->serial;
     d->stopped = 1;
     d->stop_req = 0;
-    d->pending = 0;
+    d->pend.active = 0;
     d->next1 = NEXT_FIRST;
     bump_locked(d);
     /* the picture as far as the beam has drawn it */
@@ -604,6 +864,16 @@ static void park_locked(adamdebug *d, adamcore *c, const char *reason,
         cb(ud, kind, r.pc);
         pthread_mutex_lock(&d->mtx);
     }
+}
+
+/* A stop that carries no access: pause, step, frame ... */
+static void park_plain_locked(adamdebug *d, adamcore *c, int reason,
+                              const char *why, int kind)
+{
+    adamdebug_stop_info info;
+
+    info_clear(&info, reason);
+    park_locked(d, c, &info, why, kind);
 }
 
 int adamdebug_session_frame(adamsession *s)
@@ -639,7 +909,8 @@ int adamdebug_session_frame(adamsession *s)
             continue;
         }
         if (d->stop_req) {
-            park_locked(d, c, "stopped", ADAMDBG_STOP_PAUSE);
+            park_plain_locked(d, c, ADAMDEBUG_STOP_PAUSE, "stopped",
+                              ADAMDBG_STOP_PAUSE);
             continue;
         }
         s->audio_mute = d->act == ACT_STEP;
@@ -663,36 +934,58 @@ int adamdebug_session_frame(adamsession *s)
         switch (st) {
         case ADAMCORE_RUN_STEPPED:
             d->next1 = NEXT_NONE;
-            if (d->pending) {
-                park_locked(d, c, d->pend_reason, ADAMDBG_STOP_WATCH);
+            if (d->pend.active) {
+                adamdebug_stop_info info = d->pend.info;
+                char why[64];
+                snprintf(why, sizeof why, "%s", d->pend.why);
+                park_locked(d, c, &info, why, ADAMDBG_STOP_WATCH);
             } else if (d->act == ACT_STEP && --d->count <= 0) {
-                park_locked(d, c, "step", ADAMDBG_STOP_STEP);
+                park_plain_locked(d, c, ADAMDEBUG_STOP_STEP, "step",
+                                  ADAMDBG_STOP_STEP);
             }
             break;
         case ADAMCORE_RUN_BREAKPOINT: {
             adamcore_z80_regs r;
+            int hit;
             adamcore_get_regs(c, &r);
-            if (exec_hit_locked(d, r.pc)) {
+            hit = exec_hit_locked(d, r.pc);
+            if (d->pend.active) {
+                /* a watch fired in the instruction just before this boundary
+                 * (the bp check comes before the exec hook): that stop first */
+                adamdebug_stop_info info = d->pend.info;
+                char why[64];
+                snprintf(why, sizeof why, "%s", d->pend.why);
+                park_locked(d, c, &info, why, ADAMDBG_STOP_WATCH);
+            } else if (hit) {
+                /* stopped BEFORE the instruction: it is recorded in the trace
+                 * only when it runs after the release */
+                adamdebug_stop_info info;
                 char why[48];
-                if (d->trace_on)
-                    trace_record(d, c, r.pc);
+                info_clear(&info, ADAMDEBUG_STOP_BREAKPOINT);
+                info.bp_id = hit;
                 snprintf(why, sizeof why, "breakpoint: exec $%04X", r.pc);
-                park_locked(d, c, why, ADAMDBG_STOP_BREAKPOINT);
+                park_locked(d, c, &info, why, ADAMDBG_STOP_BREAKPOINT);
             } else {
                 d->next1 = NEXT_PASS;
             }
             break;
         }
-        case ADAMCORE_RUN_HOOK_STOP:
-            park_locked(d, c, d->hook_why, d->hook_kind);
+        case ADAMCORE_RUN_HOOK_STOP: {
+            adamdebug_stop_info info = d->hook_info;
+            char why[64];
+            snprintf(why, sizeof why, "%s", d->hook_why);
+            park_locked(d, c, &info, why, d->hook_kind);
             break;
+        }
         case ADAMCORE_RUN_FRAME_DONE:
             if (d->act == ACT_FRAME && --d->count <= 0) {
-                park_locked(d, c, "frame", ADAMDBG_STOP_STEP);
+                park_plain_locked(d, c, ADAMDEBUG_STOP_FRAME, "frame",
+                                  ADAMDBG_STOP_STEP);
             } else if (d->act == ACT_SCANLINE) {
                 d->last_line = 0; /* the beam wrapped: that was a line */
                 if (--d->count <= 0) {
-                    park_locked(d, c, "scanline", ADAMDBG_STOP_STEP);
+                    park_plain_locked(d, c, ADAMDEBUG_STOP_SCANLINE, "scanline",
+                                      ADAMDBG_STOP_STEP);
                     break;
                 }
                 goto yield;
@@ -738,7 +1031,6 @@ adamdebug *adamsession_debugger(adamsession *s)
             pthread_mutex_init(&d->fuji_mtx, NULL);
             d->next_id = 1;
             d->reason_addr = -1;
-            d->tr_last = -1;
             d->fuji = calloc(1, sizeof(*d->fuji));
             if (d->fuji)
                 adamfuji_init(d->fuji);
@@ -755,6 +1047,7 @@ void adamdebug_destroy(adamdebug *d)
 {
     if (!d) return;
     symtabs_free(&d->syms);
+    free(d->ring);
     pthread_mutex_destroy(&d->mtx);
     pthread_cond_destroy(&d->cv);
     pthread_cond_destroy(&d->evcv);
@@ -788,7 +1081,7 @@ void adamdebug_detach(adamdebug *d)
     d->attached = 0;
     d->stop_req = 0;
     d->stopped = 0;
-    d->pending = 0;
+    d->pend.active = 0;
     update_engagement_locked(d);
     pthread_cond_broadcast(&d->cv);
     bump_locked(d);
@@ -1097,6 +1390,7 @@ void adamdebug_cpu_set(adamdebug *d, int reg, int v)
     case ADAM_REG_PC:
         r.pc = (uint16_t)v;
         d->reason_addr = v & 0xFFFF;
+        d->stop.pc = (uint16_t)v;
         break;
     case ADAM_REG_SP:  r.sp = (uint16_t)v; break;
     case ADAM_REG_AF:  r.a = (uint8_t)(v >> 8); r.f = (uint8_t)v; break;
@@ -1219,82 +1513,6 @@ static const char *port_name(uint8_t port, int is_in)
     default:   return is_in ? ((port & 2) ? "controller 2" : "controller 1")
                             : "PSG (SN76489)";
     }
-}
-
-int adamdebug_io_state(adamdebug *d, char *dst, int dstsz)
-{
-    adamdebug_memmap m;
-    adamcore *c;
-    uint8_t regs[8] = { 0 }, status = 0;
-    uint16_t vaddr = 0;
-    int n = 0, i;
-
-    if (!dst || dstsz <= 0) return 0;
-    dst[0] = '\0';
-    pthread_mutex_lock(&d->mtx);
-    c = core_of(d);
-    memmap_locked(d, &m);
-    if (c)
-        adamcore_vdp_state(c, regs, &status, &vaddr);
-    pthread_mutex_unlock(&d->mtx);
-
-#define PUT(...) do { if (n < dstsz - 1) { \
-        int w_ = snprintf(dst + n, (size_t)(dstsz - n), __VA_ARGS__); \
-        if (w_ > 0) n += w_ < dstsz - n ? w_ : dstsz - n - 1; } } while (0)
-
-    if (!c) {
-        PUT("The machine is not running.\n");
-        return n;
-    }
-    PUT("Console      %s, last reset %s\n",
-        m.cv_console ? "ColecoVision" : "ADAM",
-        m.game_mode ? "game" : "computer");
-    PUT("Memory map   $7F=%02X  lower bank %d (%s)  upper bank %d (%s)\n",
-        m.mem_ctrl, m.lower, m.lower_name, m.upper, m.upper_name);
-    switch (m.lower) {
-    case 0:
-        if (m.eos_rom) {
-            PUT("  $0000-$5FFF  SmartWriter ROM\n");
-            PUT("  $6000-$7FFF  EOS ROM\n");
-        } else {
-            PUT("  $0000-$7FFF  SmartWriter ROM\n");
-        }
-        break;
-    case 1: PUT("  $0000-$7FFF  RAM (intrinsic 64K)\n"); break;
-    case 2: PUT("  $0000-$7FFF  expansion RAM\n"); break;
-    default:
-        PUT("  $0000-$1FFF  OS7 ROM\n");
-        if (m.cv_console) {
-            PUT("  $2000-$5FFF  open bus\n");
-            PUT("  $6000-$7FFF  1K RAM, mirrored every $400\n");
-        } else {
-            PUT("  $2000-$7FFF  RAM\n");
-        }
-        break;
-    }
-    switch (m.upper) {
-    case 0: PUT("  $8000-$FFFF  RAM (intrinsic 64K)\n"); break;
-    case 1: PUT("  $8000-$FFFF  expansion ROM socket (empty, reads $FF)\n");
-            break;
-    case 2: PUT("  $8000-$FFFF  expansion RAM\n"); break;
-    default: PUT("  $8000-$FFFF  cartridge ROM\n"); break;
-    }
-    PUT("Net control  $3F=%02X  net reset %s, EOS ROM %s\n", m.net_ctrl,
-        m.net_reset ? "high" : "low", m.eos_rom ? "on" : "off");
-    PUT("\nPorts (A7-A5 pick the device)\n");
-    PUT("  $20-$3F  net control ($3F): D0 net reset, D1 EOS ROM at $6000\n");
-    PUT("  $40-$5F  Super Game Module $50-$53 (not on a stock console)\n");
-    PUT("  $60-$7F  memory control ($7F): D1-D0 lower bank, D3-D2 upper%s\n",
-        m.cv_console ? " (ADAM only)" : "");
-    PUT("  $80-$9F  strobe: keypad     $C0-$DF  strobe: joystick\n");
-    PUT("  $A0-$BF  VDP: even data, odd control (write) / status (read)\n");
-    PUT("  $E0-$FF  read: controllers (bit 1 picks the port); write: PSG\n");
-    PUT("\nVDP          ");
-    for (i = 0; i < 8; i++)
-        PUT("R%d=%02X ", i, regs[i]);
-    PUT("\n             status %02X, address %04X\n", status, vaddr);
-#undef PUT
-    return n;
 }
 
 /* ---- disassembly ------------------------------------------------------------- */
@@ -1438,6 +1656,7 @@ int adamdebug_symbols_load(adamdebug *d, const char *path, const char *table)
     int rc;
     pthread_mutex_lock(&d->mtx);
     rc = symtabs_load_file(&d->syms, path, table);
+    d->sym_gen++;
     bump_locked(d);
     pthread_mutex_unlock(&d->mtx);
     return rc;
@@ -1504,6 +1723,7 @@ int adamdebug_load_symbols(adamdebug *d, const char *path, char *msg,
     }
     pthread_mutex_lock(&d->mtx);
     n = symtabs_load_file(&d->syms, path, "file");
+    d->sym_gen++;
     bump_locked(d);
     pthread_mutex_unlock(&d->mtx);
     if (msg && msgsz > 0) {
@@ -1543,6 +1763,7 @@ int adamdebug_set_label(adamdebug *d, uint16_t addr, const char *label)
     if (!d) return -1;
     pthread_mutex_lock(&d->mtx);
     symtabs_set_user(&d->syms, addr, label);
+    d->sym_gen++;
     bump_locked(d);
     pthread_mutex_unlock(&d->mtx);
     return 0;
@@ -1614,7 +1835,7 @@ int adamdebug_breakpoint_add(adamdebug *d, int type, uint16_t start,
         long v;
         char why[96];
         d->in_access = 1;
-        d->acc_value = d->acc_addr = 0;
+        d->acc_value = d->acc_addr = d->acc_old = 0;
         if (eval_locked(d, cond, &v, why, sizeof why) != 0 &&
             strcmp(why, "division by zero") != 0) {
             d->in_access = 0;
@@ -1695,6 +1916,54 @@ void adamdebug_breakpoint_clear(adamdebug *d)
     pthread_mutex_unlock(&d->mtx);
 }
 
+int adamdebug_breakpoint_set_condition(adamdebug *dbg, int bp_id,
+                                       const char *condition, char *err,
+                                       int errsz)
+{
+    int idx, applied = 0;
+
+    if (err && errsz > 0) err[0] = '\0';
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    for (idx = 0; idx < dbg->nbp && dbg->bp[idx].id != bp_id; idx++) {}
+    if (idx == dbg->nbp) {
+        set_err(err, errsz, "no such breakpoint");
+    } else {
+        long val;
+        char why[96] = "";
+        if (condition && *condition) {
+            /* tried once now, so a typo is refused instead of sitting silent */
+            dbg->in_access = 1;
+            dbg->acc_value = dbg->acc_addr = dbg->acc_old = 0;
+            if (eval_locked(dbg, condition, &val, why, sizeof why) != 0 &&
+                strcmp(why, "division by zero") != 0) {
+                set_err(err, errsz, why);
+                dbg->in_access = 0;
+                pthread_mutex_unlock(&dbg->mtx);
+                return 0;
+            }
+            dbg->in_access = 0;
+        }
+        snprintf(dbg->bp[idx].condition, sizeof dbg->bp[idx].condition, "%s",
+                 condition ? condition : "");
+        bump_locked(dbg);
+        applied = 1;
+    }
+    pthread_mutex_unlock(&dbg->mtx);
+    return applied;
+}
+
+void adamdebug_breakpoint_clear_hits(adamdebug *dbg)
+{
+    int idx;
+    if (!dbg) return;
+    pthread_mutex_lock(&dbg->mtx);
+    for (idx = 0; idx < dbg->nbp; idx++)
+        dbg->bp[idx].hits = 0;
+    bump_locked(dbg);
+    pthread_mutex_unlock(&dbg->mtx);
+}
+
 int adamdebug_breakpoint_check(adamdebug *d, uint16_t addr)
 {
     int i, found = 0;
@@ -1728,42 +1997,211 @@ int adamdebug_breakpoint_toggle(adamdebug *d, uint16_t addr)
                                     NULL, 0) >= 0;
 }
 
-/* ---- trace -------------------------------------------------------------------- */
+/* ---- trace and history -------------------------------------------------------- */
 
-void adamdebug_trace_enable(adamdebug *d, int on)
+/* Trace and History share one ring: it records while either wants it. Mtx
+ * held. */
+static void apply_ring_locked(adamdebug *dbg)
 {
-    if (!d) return;
-    pthread_mutex_lock(&d->mtx);
-    d->trace_on = on != 0;
-    bump_locked(d);
-    pthread_mutex_unlock(&d->mtx);
+    if (want_ring(dbg)) {
+        pthread_mutex_lock(&dbg->trace_mtx);
+        if (!dbg->ring)
+            dbg->ring = calloc(TRACE_RING_LEN, sizeof(ring_rec));
+        pthread_mutex_unlock(&dbg->trace_mtx);
+    }
+    bump_locked(dbg);
 }
 
-int adamdebug_trace_enabled(adamdebug *d)
+void adamdebug_trace_enable(adamdebug *dbg, int enable)
 {
-    return d && d->trace_on;
+    if (!dbg) return;
+    pthread_mutex_lock(&dbg->mtx);
+    dbg->trace_on = enable != 0;
+    apply_ring_locked(dbg);
+    pthread_mutex_unlock(&dbg->mtx);
 }
 
-int adamdebug_trace_read(adamdebug *d, adamdebug_trace *out, int max)
+int adamdebug_trace_enabled(adamdebug *dbg)
 {
-    int n, i;
-    if (!d) return 0;
-    pthread_mutex_lock(&d->trace_mtx);
-    n = d->ring_count < max ? d->ring_count : max;
-    for (i = 0; i < n; i++)
-        out[i] = d->ring[(d->ring_head - 1 - i + TRACE_N) % TRACE_N];
-    pthread_mutex_unlock(&d->trace_mtx);
-    return n;
+    return dbg && dbg->trace_on;
 }
 
-void adamdebug_trace_clear(adamdebug *d)
+void adamdebug_history_enable(adamdebug *dbg, int enable)
 {
-    if (!d) return;
-    pthread_mutex_lock(&d->trace_mtx);
-    d->ring_head = d->ring_count = 0;
-    pthread_mutex_unlock(&d->trace_mtx);
-    d->tr_last = -1;
-    touch(d);
+    if (!dbg) return;
+    pthread_mutex_lock(&dbg->mtx);
+    dbg->history_want = enable != 0;
+    apply_ring_locked(dbg);
+    pthread_mutex_unlock(&dbg->mtx);
+}
+
+int adamdebug_history_enabled(adamdebug *dbg)
+{
+    return dbg && dbg->history_want;
+}
+
+static void ring_entry(const ring_rec *rec, adamdebug_trace *out)
+{
+    z80d_insn insn;
+
+    memset(out, 0, sizeof *out);
+    out->pc = rec->pc;
+    out->sp = rec->sp;
+    out->af = rec->af;
+    out->bc = rec->bc;
+    out->de = rec->de;
+    out->hl = rec->hl;
+    out->ix = rec->ix;
+    out->iy = rec->iy;
+    out->af2 = rec->af2;
+    out->bc2 = rec->bc2;
+    out->de2 = rec->de2;
+    out->hl2 = rec->hl2;
+    out->reg_i = rec->reg_i;
+    out->reg_r = rec->reg_r;
+    out->im = rec->im;
+    out->iff = rec->iff;
+    out->halted = rec->halted;
+    out->repeat = rec->repeat;
+    out->cycles = rec->cycles;
+    out->line = rec->line;
+    memcpy(out->bytes, rec->bytes, 4);
+    out->len = (uint8_t)z80_disassemble(&insn, rec->pc, rec->bytes);
+}
+
+/* The newest `max` records, oldest first, into out. Returns how many. */
+static int ring_newest(adamdebug *dbg, adamdebug_trace *out, int max)
+{
+    uint64_t held, take, idx;
+
+    if (!dbg || max <= 0) return 0;
+    pthread_mutex_lock(&dbg->trace_mtx);
+    if (!dbg->ring) {
+        pthread_mutex_unlock(&dbg->trace_mtx);
+        return 0;
+    }
+    held = dbg->ring_total < TRACE_RING_LEN ? dbg->ring_total : TRACE_RING_LEN;
+    take = held < (uint64_t)max ? held : (uint64_t)max;
+    for (idx = 0; idx < take; idx++)
+        ring_entry(&dbg->ring[(dbg->ring_total - take + idx) & (TRACE_RING_LEN - 1)],
+                   &out[idx]);
+    pthread_mutex_unlock(&dbg->trace_mtx);
+    return (int)take;
+}
+
+int adamdebug_trace_read(adamdebug *dbg, adamdebug_trace *out, int max)
+{
+    int count = ring_newest(dbg, out, max), idx;
+
+    for (idx = 0; idx < count / 2; idx++) { /* newest first */
+        adamdebug_trace swap = out[idx];
+        out[idx] = out[count - 1 - idx];
+        out[count - 1 - idx] = swap;
+    }
+    return count;
+}
+
+void adamdebug_trace_clear(adamdebug *dbg)
+{
+    if (!dbg) return;
+    pthread_mutex_lock(&dbg->trace_mtx);
+    dbg->ring_total = 0;
+    pthread_mutex_unlock(&dbg->trace_mtx);
+    touch(dbg);
+}
+
+int adamdebug_trace_count(adamdebug *dbg)
+{
+    uint64_t held;
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->trace_mtx);
+    held = dbg->ring_total < TRACE_RING_LEN ? dbg->ring_total : TRACE_RING_LEN;
+    pthread_mutex_unlock(&dbg->trace_mtx);
+    return (int)held;
+}
+
+uint64_t adamdebug_trace_total(adamdebug *dbg)
+{
+    uint64_t total;
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->trace_mtx);
+    total = dbg->ring_total;
+    pthread_mutex_unlock(&dbg->trace_mtx);
+    return total;
+}
+
+int adamdebug_trace_format(const adamdebug_trace *rec, char *dst, int dstsz)
+{
+    z80d_insn insn;
+
+    if (!rec || !dst || dstsz <= 0) return 0;
+    z80_disassemble(&insn, rec->pc, rec->bytes);
+    return snprintf(dst, (size_t)dstsz,
+                    "%04X  %-18s AF=%04X BC=%04X DE=%04X HL=%04X SP=%04X",
+                    rec->pc, insn.text, rec->af, rec->bc, rec->de, rec->hl,
+                    rec->sp);
+}
+
+int adamdebug_trace_match(const adamdebug_trace *rec, int filter, uint16_t low,
+                          uint16_t high)
+{
+    z80d_insn insn;
+
+    if (!rec) return 0;
+    if (filter == ADAMDEBUG_TRACE_RANGE) {
+        if (low > high) { uint16_t swap = low; low = high; high = swap; }
+        return rec->pc >= low && rec->pc <= high;
+    }
+    if (filter == ADAMDEBUG_TRACE_BRANCHES) {
+        z80_disassemble(&insn, rec->pc, rec->bytes);
+        return (insn.flags & (ADAMDASM_JUMP | ADAMDASM_CALL | ADAMDASM_RET)) != 0;
+    }
+    return 1;
+}
+
+void adamdebug_history_clear(adamdebug *dbg)
+{
+    adamdebug_trace_clear(dbg);
+}
+
+uint64_t adamdebug_history_count(adamdebug *dbg)
+{
+    return adamdebug_trace_total(dbg);
+}
+
+int adamdebug_history_copy(adamdebug *dbg, adamhist_entry *out, int max)
+{
+    return ring_newest(dbg, out, max);
+}
+
+int adamdebug_history_format(const adamhist_entry *rec, char *dst, int dstsz)
+{
+    static const char names[] = "SZYHXPNC";
+    z80d_insn insn;
+    char flags[9];
+    int idx, len;
+
+    if (!rec || !dst || dstsz <= 0) return 0;
+    z80_disassemble(&insn, rec->pc, rec->bytes);
+    for (idx = 0; idx < 8; idx++)
+        flags[idx] = ((rec->af >> (7 - idx)) & 1) ? names[idx] : '.';
+    flags[8] = '\0';
+    len = snprintf(dst, (size_t)dstsz,
+                   "%04X  %-18s AF=%04X BC=%04X DE=%04X HL=%04X IX=%04X "
+                   "IY=%04X SP=%04X  %s%s",
+                   rec->pc, insn.text, rec->af, rec->bc, rec->de, rec->hl,
+                   rec->ix, rec->iy, rec->sp, flags,
+                   rec->halted ? " HALT" : "");
+    if (len > 0 && len < dstsz && rec->repeat)
+        len += snprintf(dst + len, (size_t)(dstsz - len), " x%u",
+                        (unsigned)rec->repeat + 1);
+    return len < dstsz ? len : dstsz - 1;
+}
+
+int adamdebug_history_match(const adamhist_entry *rec, int filter,
+                            uint16_t low, uint16_t high)
+{
+    return adamdebug_trace_match(rec, filter, low, high);
 }
 
 /* ---- files -------------------------------------------------------------------- */
@@ -2020,4 +2458,450 @@ int adamdebug_fujinet_state(adamdebug *d, char *dst, int dstsz)
         pthread_mutex_unlock(&d->fuji_mtx);
     }
     return n;
+}
+
+/* ---- the stop, in words ------------------------------------------------------- */
+
+static int format_stop(const adamdebug_stop_info *info, char *dst, int dstsz)
+{
+    char value[24] = "", was[24] = "";
+    const unsigned stop_pc = info->pc;
+
+    if (info->value >= 0)
+        snprintf(value, sizeof value, " = $%02X", info->value);
+    if (info->old_value >= 0 && info->reason == ADAMDEBUG_STOP_WATCH_WRITE)
+        snprintf(was, sizeof was, " (was $%02X)", info->old_value);
+    switch (info->reason) {
+    case ADAMDEBUG_STOP_PAUSE:
+        return snprintf(dst, (size_t)dstsz, "paused at $%04X", stop_pc);
+    case ADAMDEBUG_STOP_STEP:
+        return snprintf(dst, (size_t)dstsz, "step at $%04X", stop_pc);
+    case ADAMDEBUG_STOP_FRAME:
+        return snprintf(dst, (size_t)dstsz, "frame at $%04X", stop_pc);
+    case ADAMDEBUG_STOP_SCANLINE:
+        return snprintf(dst, (size_t)dstsz, "scanline at $%04X", stop_pc);
+    case ADAMDEBUG_STOP_BREAKPOINT:
+        return snprintf(dst, (size_t)dstsz, "breakpoint: exec $%04X", stop_pc);
+    case ADAMDEBUG_STOP_WATCH_WRITE:
+        return snprintf(dst, (size_t)dstsz, "wrote $%04X%s%s at $%04X",
+                        info->addr, value, was, stop_pc);
+    case ADAMDEBUG_STOP_WATCH_READ:
+        return snprintf(dst, (size_t)dstsz, "read $%04X%s at $%04X",
+                        info->addr, value, stop_pc);
+    case ADAMDEBUG_STOP_WATCH_IN:
+        return snprintf(dst, (size_t)dstsz, "in $%02X%s at $%04X",
+                        info->addr & 0xFF, value, stop_pc);
+    case ADAMDEBUG_STOP_WATCH_OUT:
+        return snprintf(dst, (size_t)dstsz, "out $%02X%s at $%04X",
+                        info->addr & 0xFF, value, stop_pc);
+    default:
+        return snprintf(dst, (size_t)dstsz, "stopped at $%04X", stop_pc);
+    }
+}
+
+int adamdebug_stop_text(adamdebug *dbg, char *dst, int dstsz, int *address)
+{
+    int len;
+
+    if (!dst || dstsz <= 0) return 0;
+    dst[0] = '\0';
+    if (address) *address = -1;
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    if (dbg->stopped) {
+        len = format_stop(&dbg->stop, dst, dstsz);
+        if (address) *address = dbg->stop.pc;
+    } else {
+        len = snprintf(dst, (size_t)dstsz, "running");
+    }
+    pthread_mutex_unlock(&dbg->mtx);
+    return len < dstsz ? len : dstsz - 1;
+}
+
+int adamdebug_last_stop(adamdebug *dbg, adamdebug_stop_info *out)
+{
+    int stopped;
+    if (!dbg || !out) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    *out = dbg->stop;
+    stopped = dbg->stopped;
+    pthread_mutex_unlock(&dbg->mtx);
+    return stopped;
+}
+
+uint64_t adamdebug_stop_serial(adamdebug *dbg)
+{
+    uint64_t serial;
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    serial = dbg->serial;
+    pthread_mutex_unlock(&dbg->mtx);
+    return serial;
+}
+
+int adamdebug_stop_snapshot(adamdebug *dbg, adamdebug_snapshot *out)
+{
+    if (!out) return 0;
+    memset(out, 0, sizeof *out);
+    out->address = -1;
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    out->paused = dbg->stopped;
+    out->serial = dbg->serial;
+    out->stop = dbg->stop;
+    if (out->paused) {
+        format_stop(&dbg->stop, out->text, (int)sizeof out->text);
+        out->address = dbg->stop.pc;
+    } else {
+        snprintf(out->text, sizeof out->text, "running");
+    }
+    pthread_mutex_unlock(&dbg->mtx);
+    return out->paused;
+}
+
+/* ---- registers, in bulk -------------------------------------------------------- */
+
+int adamdebug_regs_set(adamdebug *dbg, const adamcore_z80_regs *regs, char *err,
+                       int errsz)
+{
+    adamcore *core;
+    adamcore_z80_regs before, applied;
+
+    if (err && errsz > 0) err[0] = '\0';
+    if (!dbg || !regs) return 0;
+    if (regs->im > 2) {
+        set_err(err, errsz, "IM is 0, 1 or 2");
+        return 0;
+    }
+    if (regs->iff1 > 1 || regs->iff2 > 1 || regs->halted > 1) {
+        set_err(err, errsz, "IFF1, IFF2 and HALT are 0 or 1");
+        return 0;
+    }
+    pthread_mutex_lock(&dbg->mtx);
+    core = core_of(dbg);
+    if (!core || !dbg->stopped) {
+        pthread_mutex_unlock(&dbg->mtx);
+        set_err(err, errsz, "the machine is running (stop it first)");
+        return 0;
+    }
+    adamcore_get_regs(core, &before);
+    applied = *regs;
+    applied.cycles = before.cycles;
+    adamcore_set_regs(core, &applied);
+    if (applied.pc != before.pc) {
+        dbg->reason_addr = applied.pc;
+        dbg->stop.pc = applied.pc;
+    }
+    bump_locked(dbg);
+    pthread_mutex_unlock(&dbg->mtx);
+    if (err && errsz > 0 && applied.halted && applied.pc != before.pc)
+        snprintf(err, (size_t)errsz,
+                 "PC changed while the CPU is halted: it stays halted until "
+                 "HALT is cleared or an interrupt arrives");
+    return 1;
+}
+
+int adamdebug_register_set(adamdebug *dbg, const char *name, long value,
+                           char *err, int errsz)
+{
+    adamcore_z80_regs regs;
+    adamcore *core;
+    const int code = name ? reg_code(name) : -1;
+
+    if (err && errsz > 0) err[0] = '\0';
+    if (!dbg) return 0;
+    if (code < 0) {
+        if (err && errsz > 0)
+            snprintf(err, (size_t)errsz, "unknown register '%s'",
+                     name ? name : "");
+        return 0;
+    }
+    if (code == R_IM && (value < 0 || value > 2)) {
+        set_err(err, errsz, "IM is 0, 1 or 2");
+        return 0;
+    }
+    if (code == R_IFF1 || code == R_IFF2)
+        value = value != 0;
+    pthread_mutex_lock(&dbg->mtx);
+    core = core_of(dbg);
+    if (core)
+        adamcore_get_regs(core, &regs);
+    pthread_mutex_unlock(&dbg->mtx);
+    if (!core) {
+        set_err(err, errsz, "the machine is not running");
+        return 0;
+    }
+    reg_store(&regs, code, value);
+    return adamdebug_regs_set(dbg, &regs, err, errsz);
+}
+
+/* ---- symbols, for a Symbols tab ------------------------------------------------- */
+
+int adamdebug_symbols_count(adamdebug *dbg)
+{
+    int total = 0, idx;
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    for (idx = 0; idx < dbg->syms.count; idx++)
+        total += dbg->syms.tables[idx].count;
+    pthread_mutex_unlock(&dbg->mtx);
+    return total;
+}
+
+/* mtx held. */
+static const sym_entry *symbol_entry_locked(const adamdebug *dbg, int index)
+{
+    int idx;
+    if (index < 0) return NULL;
+    for (idx = 0; idx < dbg->syms.count; idx++) {
+        const sym_table *table = &dbg->syms.tables[idx];
+        if (index < table->count)
+            return &table->entries[index];
+        index -= table->count;
+    }
+    return NULL;
+}
+
+int adamdebug_symbols_get(adamdebug *dbg, int index, uint16_t *addr, char *name,
+                          int namesz)
+{
+    const sym_entry *entry;
+    int found = 0;
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    entry = symbol_entry_locked(dbg, index);
+    if (entry) {
+        if (addr) *addr = entry->addr;
+        if (name && namesz > 0)
+            snprintf(name, (size_t)namesz, "%s", entry->name);
+        found = 1;
+    }
+    pthread_mutex_unlock(&dbg->mtx);
+    return found;
+}
+
+typedef struct { uint16_t addr; const char *name; int index; } sym_pick;
+
+static int sym_pick_cmp(const void *left, const void *right)
+{
+    const sym_pick *lhs = left, *rhs = right;
+    if (lhs->addr != rhs->addr) return lhs->addr < rhs->addr ? -1 : 1;
+    return strcasecmp(lhs->name, rhs->name);
+}
+
+static int contains_nocase(const char *hay, const char *needle)
+{
+    const size_t len = strlen(needle);
+    if (!len) return 1;
+    for (; *hay; hay++)
+        if (!strncasecmp(hay, needle, len)) return 1;
+    return 0;
+}
+
+int adamdebug_symbols_filter(adamdebug *dbg, const char *text, int *out, int max)
+{
+    sym_pick *pick;
+    int total = 0, count = 0, idx, base = 0, table_idx;
+
+    if (!dbg || !out || max <= 0) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    for (idx = 0; idx < dbg->syms.count; idx++)
+        total += dbg->syms.tables[idx].count;
+    pick = total > 0 ? malloc((size_t)total * sizeof *pick) : NULL;
+    if (!pick) {
+        pthread_mutex_unlock(&dbg->mtx);
+        return 0;
+    }
+    for (table_idx = 0; table_idx < dbg->syms.count; table_idx++) {
+        const sym_table *table = &dbg->syms.tables[table_idx];
+        for (idx = 0; idx < table->count && count < total; idx++)
+            if (contains_nocase(table->entries[idx].name, text ? text : "")) {
+                pick[count].addr = table->entries[idx].addr;
+                pick[count].name = table->entries[idx].name;
+                pick[count].index = base + idx;
+                count++;
+            }
+        base += table->count;
+    }
+    qsort(pick, (size_t)count, sizeof *pick, sym_pick_cmp);
+    if (count > max) count = max;
+    for (idx = 0; idx < count; idx++)
+        out[idx] = pick[idx].index;
+    pthread_mutex_unlock(&dbg->mtx);
+    free(pick);
+    return count;
+}
+
+unsigned adamdebug_symbols_generation(adamdebug *dbg)
+{
+    unsigned gen;
+    if (!dbg) return 0;
+    pthread_mutex_lock(&dbg->mtx);
+    gen = dbg->sym_gen;
+    pthread_mutex_unlock(&dbg->mtx);
+    return gen;
+}
+
+void adamdebug_clear_symbols(adamdebug *dbg)
+{
+    if (!dbg) return;
+    pthread_mutex_lock(&dbg->mtx);
+    symtabs_free(&dbg->syms);
+    memset(&dbg->syms, 0, sizeof dbg->syms);
+    symtabs_load_text(&dbg->syms, adamdebug_builtin_os7_sym, "os7");
+    symtabs_load_text(&dbg->syms, adamdebug_builtin_eos_sym, "eos");
+    dbg->sym_gen++;
+    bump_locked(dbg);
+    pthread_mutex_unlock(&dbg->mtx);
+}
+
+const sym_tables *adamdebug_symtabs(adamdebug *dbg)
+{
+    return dbg ? &dbg->syms : NULL;
+}
+
+/* ---- search ------------------------------------------------------------------------ */
+
+static int match_at(const uint8_t *mem, unsigned addr, const uint8_t *pat,
+                    int count, uint8_t mask, int flags)
+{
+    int idx;
+    for (idx = 0; idx < count; idx++) {
+        uint8_t have = mem[addr + (unsigned)idx];
+        uint8_t want = pat[idx];
+        if (flags & ADAMDEBUG_SEARCH_NOCASE) {
+            if (have >= 'a' && have <= 'z') have = (uint8_t)(have - 32);
+            if (want >= 'a' && want <= 'z') want = (uint8_t)(want - 32);
+        }
+        if ((have & mask) != (want & mask)) return 0;
+    }
+    return 1;
+}
+
+/* The CPU's 64K as mapped now; NULL unless stopped. */
+static uint8_t *snapshot_64k(adamdebug *dbg)
+{
+    uint8_t *mem;
+    if (!adamdebug_is_stopped(dbg)) return NULL;
+    mem = malloc(0x10000);
+    if (!mem) return NULL;
+    if (adamdebug_read(dbg, 0, mem, 0x10000) != 0x10000) {
+        free(mem);
+        return NULL;
+    }
+    return mem;
+}
+
+static int search_buf(const uint8_t *mem, const uint8_t *pat, int count,
+                      uint8_t mask, int flags, unsigned from, unsigned last,
+                      uint16_t *out, int max)
+{
+    unsigned addr;
+    int found = 0;
+    for (addr = from; addr <= last && addr + (unsigned)count - 1 <= 0xFFFF &&
+                      found < max; addr++)
+        if (match_at(mem, addr, pat, count, mask, flags))
+            out[found++] = (uint16_t)addr;
+    return found;
+}
+
+int adamdebug_search(adamdebug *dbg, const uint8_t *pat, int count, uint8_t mask,
+                     int flags, uint16_t from, uint16_t last, uint16_t *out,
+                     int max)
+{
+    uint8_t *mem;
+    int found;
+
+    if (!dbg || !pat || count <= 0 || !out || max <= 0) return -1;
+    mem = snapshot_64k(dbg);
+    if (!mem) return -1;
+    if (from > last) { uint16_t swap = from; from = last; last = swap; }
+    found = search_buf(mem, pat, count, mask, flags, from, last, out, max);
+    free(mem);
+    return found;
+}
+
+int adamdebug_search_next(adamdebug *dbg, const uint8_t *pat, int count,
+                          uint8_t mask, int flags, uint16_t from,
+                          int backward, uint16_t *found)
+{
+    uint8_t *mem;
+    uint16_t hit = 0;
+    int result = 0;
+
+    if (!dbg || !pat || count <= 0 || !found) return -1;
+    mem = snapshot_64k(dbg);
+    if (!mem) return -1;
+    if (!backward) {
+        /* after `from` to the end, then 0..from (which includes `from`) */
+        if ((unsigned)from + 1 <= 0xFFFF &&
+            search_buf(mem, pat, count, mask, flags, (unsigned)from + 1,
+                       0xFFFF, &hit, 1))
+            result = 1;
+        else if (search_buf(mem, pat, count, mask, flags, 0, from, &hit, 1))
+            result = 1;
+    } else {
+        /* the nearest match before `from`, else the last one from `from` up */
+        int pass;
+        for (pass = 0; pass < 2 && !result; pass++) {
+            const int start = pass == 0 ? (int)from - 1 : 0xFFFF;
+            const int stop = pass == 0 ? 0 : (int)from;
+            int addr;
+            for (addr = start; addr >= stop; addr--)
+                if (addr + count - 1 <= 0xFFFF &&
+                    match_at(mem, (unsigned)addr, pat, count, mask, flags)) {
+                    hit = (uint16_t)addr;
+                    result = 1;
+                    break;
+                }
+        }
+    }
+    free(mem);
+    if (result) *found = hit;
+    return result;
+}
+
+/* ---- the Video tab's console text ------------------------------------------------- */
+
+void adamdebug_set_video_text(const char *(*func)(const char *section))
+{
+    g_video_text = func;
+}
+
+const char *(*adamdebug_video_text_hook(void))(const char *section)
+{
+    return g_video_text;
+}
+
+/* ---- for iostate.c and memtools.c -------------------------------------------------- */
+
+void adamdebug_lock(adamdebug *dbg)
+{
+    pthread_mutex_lock(&dbg->mtx);
+}
+
+void adamdebug_unlock(adamdebug *dbg)
+{
+    pthread_mutex_unlock(&dbg->mtx);
+}
+
+adamcore *adamdebug_core_locked(adamdebug *dbg)
+{
+    return dbg ? core_of(dbg) : NULL;
+}
+
+adamsession *adamdebug_session_of(adamdebug *dbg)
+{
+    return dbg ? dbg->session : NULL;
+}
+
+int adamdebug_fuji_packets(adamdebug *dbg, uint32_t packets[2])
+{
+    packets[0] = packets[1] = 0;
+    if (!dbg->fuji) return 0;
+    pthread_mutex_lock(&dbg->fuji_mtx);
+    packets[0] = dbg->fuji->packets[0];
+    packets[1] = dbg->fuji->packets[1];
+    pthread_mutex_unlock(&dbg->fuji_mtx);
+    return 1;
 }

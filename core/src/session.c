@@ -22,6 +22,7 @@
 
 #include "compat.h"
 #include "roms_embedded.h"
+#include "vidcap_internal.h"
 #include "session_internal.h"
 
 /****************************************************************************/
@@ -194,6 +195,7 @@ static void *emu_thread_main(void *arg)
         return NULL;
     }
     s->core = core;
+    adam_vidcap_core_set(core);
     if (s->debugger) {
         /* The FujiNet trace is always on: it is cheap, and it is most
          * useful about what happened before anyone thought to look. */
@@ -204,10 +206,12 @@ static void *emu_thread_main(void *arg)
     next_us = read_timer_us();
     while (!s->stop_flag) {
         int changed;
+        adam_vidcap_sync();
         if (s->dbg_engaged)
             changed = adamdebug_session_frame(s);
         else
             changed = adamcore_run_frame(core);
+        adam_vidcap_frame_done(); /* the Video tab's copy, while one exists */
 
         if (changed)
             session_publish_frame(s, adamcore_framebuffer(core, NULL, NULL));
@@ -252,6 +256,7 @@ static void *emu_thread_main(void *arg)
         }
     }
 
+    adam_vidcap_core_set(NULL); /* before the core goes: a parked read holds its lock */
     adamdebug_clear_core(s); /* s->core = NULL, under the debugger's lock */
     s->fujinet_link = 0;
     adamcore_destroy(core);

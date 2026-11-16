@@ -28,6 +28,11 @@ extern "C" {
  * buttons, the debugger's current-line highlight and the Run button. It is
  * light, so text on it is black. */
 #define ADAMSESSION_ACCENT_RGB 0x8D84E5
+/* INK is the text on an accent fill (black: the accent is a light colour);
+ * LIGHT is the accent used as TEXT or a fill on a dark theme (the accent
+ * already reads there, so it is the same colour). */
+#define ADAMSESSION_ACCENT_INK_RGB   0x000000
+#define ADAMSESSION_ACCENT_LIGHT_RGB 0x8D84E5
 
 /* AdamNet Bus-over-IP loopback port (core listens, FujiNet connects in),
  * fixed to match the Android app. The FujiNet web admin port is chosen at

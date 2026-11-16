@@ -26,8 +26,9 @@ static const char *const platform_names[] = { "GNOME", "KDE", "Windows", "macOS"
 /* What the frontends' Help buttons and menus open. */
 static const char *const contexts[] = {
     "main", "keypad", "fujilog", "prefs/Machine", "prefs/Connection",
-    "debugger/console", "debugger/cpu", "debugger/disassembly", "debugger/vdp",
-    "debugger/breakpoints", "debugger/io", "debugger/fujinet",
+    "debugger/console", "debugger/disassembly", "debugger/memory", "debugger/breakpoints",
+    "debugger/watches", "debugger/cart", "debugger/trace", "debugger/history", "debugger/video",
+    "debugger/sound", "debugger/symbols", "debugger/fujinet",
 };
 
 /* The Preferences pages: what each one has, as the frontends label it. */
@@ -193,11 +194,13 @@ static void
 check_debugger(int p)
 {
     static const char *const words[] = { "Run or Stop", "Step Over", "Step Out", "Frame", "Run to Cursor",
-                                         "Load Symbols", "seven tabs" };
+                                         "Load Symbols", "twelve tabs", "Pop Out", "Record", "Poke", "Display", "Decoded", "Beam",
+                                         "Values", "Zoom", "Fit", "Overlays", "Pixel", "Registers", "Colours",
+                                         "Lines", "Timing", "Break on writes" };
     static const char *const commands[] = { "step", "over", "out", "run", "stop", "runto", "scanline", "frame",
-                                            "break", "bpr", "bpw", "bpin", "bpout", "delete", "enable", "clear",
+                                            "break", "bpr", "bpw", "bpa", "bpin", "bpout", "delete", "enable", "clear",
                                             "print", "regs", "set", "mem", "poke", "vram", "vpoke", "vdp", "io",
-                                            "map", "fujinet", "label", "labels", "disasm", "trace", "save" };
+                                            "map", "cart", "sound", "video", "find", "watch", "unwatch", "symbols", "fujinet", "label", "labels", "disasm", "trace", "save" };
     int t, b;
 
     for (size_t k = 0; k < sizeof words / sizeof *words; k++)
@@ -255,7 +258,7 @@ main(void)
     CHECK(adamhelp_search(ADAMHELP_GNOME, "cartridge", hits, 16) > 0, "search cartridge");
     CHECK(adamhelp_search(ADAMHELP_GNOME, "zzqxj", hits, 16) == 0, "search nonsense");
     int n = adamhelp_search(ADAMHELP_KDE, "sprites", hits, 16);
-    CHECK(n > 0 && adamhelp_find("debugger/vdp", &t, &b) == 0
+    CHECK(n > 0 && adamhelp_find("debugger/video", &t, &b) == 0
           && hits[0].topic == t && hits[0].block == b, "sprites is the first hit");
     for (int i = 1; i < n; i++)
         CHECK(hits[i - 1].score >= hits[i].score, "hits best first");
