@@ -25,6 +25,7 @@ add_executable(fujinet-go-adam-kde
   KeyForward.cpp
   keypad/KeypadWindow.cpp
   debugger/DebuggerWindow.cpp
+  debugger/VideoTab.cpp
 )
 target_link_libraries(fujinet-go-adam-kde PRIVATE
   adamsession Qt6::Widgets Qt6::GuiPrivate)
@@ -64,7 +65,7 @@ endif()
 # cartridge.
 if(Qt6Test_FOUND)
   add_executable(debugger_test debugger_test.cpp FujiNetWindows.cpp
-                 debugger/DebuggerWindow.cpp MainWindow.cpp DisplayWidget.cpp
+                 debugger/DebuggerWindow.cpp debugger/VideoTab.cpp MainWindow.cpp DisplayWidget.cpp
                  SoftDisplayWidget.cpp FrameFeed.cpp SettingsDialog.cpp KeyForward.cpp keypad/KeypadWindow.cpp
                  help/HelpWindow.cpp)
   target_link_libraries(debugger_test PRIVATE adamsession Qt6::Widgets
