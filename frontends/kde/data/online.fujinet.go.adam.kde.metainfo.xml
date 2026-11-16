@@ -27,15 +27,15 @@
   <screenshots>
     <screenshot type="default">
       <caption>FujiNet CONFIG running on the emulated ADAM</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/v0.10.1/data/screenshots/kde/1_main.png</image>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/v0.14.0/data/screenshots/kde/1_main.png</image>
     </screenshot>
     <screenshot>
-      <caption>The built-in debugger: registers and memory</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/v0.10.1/data/screenshots/kde/2_debugger.png</image>
+      <caption>The built-in debugger: the Video tab on the running CONFIG</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/v0.14.0/data/screenshots/kde/2_debugger.png</image>
     </screenshot>
     <screenshot>
       <caption>Preferences</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/v0.10.1/data/screenshots/kde/3_preferences.png</image>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-adam-desktop/v0.14.0/data/screenshots/kde/3_preferences.png</image>
     </screenshot>
   </screenshots>
   <url type="homepage">https://fujinet.online/</url>
@@ -45,6 +45,13 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.14.0" date="2026-11-16">
+      <description>
+        <p>
+          A twelve-tab debugger: Console, Disassembly, Memory, Breakpoints, Watches, Cart &amp; I/O, Trace, History, Video, Sound, Symbols and FujiNet, with editable registers under every tab and Pop Out. Expression conditions, read, write, access and port breakpoints, a Video tab with the display, decoded tiles and sprites, the beam and per-line registers, and the SN76489 decoded.
+        </p>
+      </description>
+    </release>
     <release version="0.13.0" date="2026-11-08">
       <description>
         <p>
