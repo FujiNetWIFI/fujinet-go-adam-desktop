@@ -1,8 +1,9 @@
 /*
  * AdamWindow: main window of the GNOME frontend. Header bar + menu over the
- * emulator display; keyboard capture routes everything except F9 (keypad
- * window), F10 (menu), F11 (fullscreen) and F12 (debugger) to the ADAM. No
- * on-screen input panels are shown unless the user asks for them.
+ * emulator display; keyboard capture routes everything except F9
+ * (Controllers window), F10 (menu), F11 (fullscreen) and F12 (debugger) to
+ * the ADAM. No on-screen input panels are shown unless the user asks for them.
+ * The Controllers window sends its typed keys through adam_window_key too.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -15,7 +16,7 @@
 #include "debugger/dbg_window.h"
 #include "display.h"
 #include "help/help_window.h"
-#include "keypad/keypad_window.h"
+#include "controllers/controllers_window.h"
 #include "prefs.h"
 #include "webview.h"
 
@@ -26,6 +27,8 @@ struct _AdamWindow {
     AdamDisplay *display;
     AdwToastOverlay *toasts;
     GtkMenuButton *menu_button;
+    guint sysact_id;            /* the 50 ms drain: gamepad console actions, pad toasts */
+    unsigned pad_generation;    /* the pad set the last toast was for */
 };
 
 G_DEFINE_FINAL_TYPE(AdamWindow, adam_window, ADW_TYPE_APPLICATION_WINDOW)
@@ -114,22 +117,9 @@ static guint32 session_keysym(guint keyval, guint keycode)
     return keysym ? keysym : keyval;
 }
 
-gboolean adam_window_input_key(adamsession *session, guint keyval,
-                               guint keycode, GdkModifierType state,
-                               gboolean down)
-{
-    guint32 keysym = session_keysym(keyval, keycode);
-
-    if (down && adam_keypad_window_map_key(keysym))
-        return TRUE;
-    /* A release always reaches the session: it clears exactly what the
-     * press asserted, even if Map mode was armed in between. */
-    return adamsession_input_key(session, keysym, down,
-                                 (state & GDK_CONTROL_MASK) != 0) != 0;
-}
-
-gboolean adam_window_type_key(adamsession *session, guint keyval,
-                              GdkModifierType state)
+/* Step 2 of the key path (after Map and the controller bindings and the
+ * window's own shortcuts): type the key on the ADAM keyboard. */
+static gboolean type_key(adamsession *session, guint keyval, GdkModifierType state)
 {
     int code;
 
@@ -144,29 +134,35 @@ gboolean adam_window_type_key(adamsession *session, guint keyval,
     return TRUE;
 }
 
-static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
-                               guint keycode, GdkModifierType state,
-                               gpointer user_data)
+/* The one key path: the main window and the Controllers window both end
+ * here, so the machine, F9, F10, F11, F12 and Map mode behave the same
+ * whichever has the focus. Returns whether the key was consumed. */
+gboolean adam_window_key(AdamWindow *self, guint keyval, guint keycode,
+                         GdkModifierType state, gboolean down)
 {
-    AdamWindow *self = ADAM_WINDOW(user_data);
-    (void)controller;
+    const guint32 keysym = session_keysym(keyval, keycode);
+    const int ctrl = (state & GDK_CONTROL_MASK) != 0;
 
-    /* F1 is the ADAM's SmartKey I in the window itself, and Help while
-     * Preferences or another dialog is open */
-    if (keyval == GDK_KEY_F1 && adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(self)) &&
-        !(state & GDK_MODIFIER_MASK & ~GDK_LOCK_MASK)) {
-        adam_help_for(GTK_WINDOW(self));
-        return TRUE;
+    if (!down) {
+        /* A release always reaches the session: it clears exactly what the
+         * press asserted, even if Map mode was armed in between. Map only
+         * keeps the release of the key it took out of the machine's way. */
+        const gboolean released = adamsession_input_key(self->session, keysym, 0, ctrl) != 0;
+        return adam_controllers_map_key(keyval, keycode, state, FALSE) || released;
     }
 
-    /* Map capture and the controller bindings first (Ctrl+digit is the
-     * built-in chord for the port 1 keypad). */
-    if (adam_window_input_key(self->session, keyval, keycode, state, TRUE))
+    /* Map capture, then the controller bindings (Ctrl+digit is the built-in
+     * chord for the port 1 keypad). */
+    if (adam_controllers_map_key(keyval, keycode, state, TRUE))
+        return TRUE;
+    if (adamsession_input_key(self->session, keysym, 1, ctrl))
         return TRUE;
 
+    /* The window's own keys, deliberately not bindable: they are how you
+     * reach the panels that do the binding. */
     switch (keyval) {
     case GDK_KEY_F9:
-        gtk_widget_activate_action(GTK_WIDGET(self), "win.keypad", NULL);
+        gtk_widget_activate_action(GTK_WIDGET(self), "win.controllers", NULL);
         return TRUE;
     case GDK_KEY_F10: /* open the primary menu */
         gtk_menu_button_popup(self->menu_button);
@@ -183,17 +179,39 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
     default:
         break;
     }
+    return type_key(self->session, keyval, state);
+}
 
-    return adam_window_type_key(self->session, keyval, state);
+static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
+                               guint keycode, GdkModifierType state,
+                               gpointer user_data)
+{
+    AdamWindow *self = ADAM_WINDOW(user_data);
+    (void)controller;
+
+    /* F1 is the ADAM's SmartKey I in the window itself, and Help while
+     * Preferences or another dialog is open */
+    if (keyval == GDK_KEY_F1 && adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(self)) &&
+        !(state & GDK_MODIFIER_MASK & ~GDK_LOCK_MASK)) {
+        adam_help_for(GTK_WINDOW(self));
+        return TRUE;
+    }
+    return adam_window_key(self, keyval, keycode, state, TRUE);
 }
 
 static void on_key_released(GtkEventControllerKey *controller, guint keyval,
                             guint keycode, GdkModifierType state,
                             gpointer user_data)
 {
-    AdamWindow *self = ADAM_WINDOW(user_data);
     (void)controller;
-    adam_window_input_key(self->session, keyval, keycode, state, FALSE);
+    adam_window_key(ADAM_WINDOW(user_data), keyval, keycode, state, FALSE);
+}
+
+/* Lets go of every key the keyboard holds (the mouse's and the pads' are
+ * their own sources). */
+void adam_window_release_keys(AdamWindow *self)
+{
+    adamsession_release_all(self->session);
 }
 
 /* Keys held into a focus change must not stay down. */
@@ -203,7 +221,28 @@ static void on_active_changed(GObject *object, GParamSpec *pspec,
     AdamWindow *self = ADAM_WINDOW(user_data);
     (void)pspec;
     if (!gtk_window_is_active(GTK_WINDOW(object)))
-        adamsession_release_all(self->session);
+        adam_window_release_keys(self);
+}
+
+/* Every 50 ms: the console actions the gamepad thread posted (it cannot call
+ * into the toolkit), and a toast when a pad comes or goes. */
+static gboolean sysact_drain_tick(gpointer user_data)
+{
+    AdamWindow *self = ADAM_WINDOW(user_data);
+    unsigned gen;
+    int sysact;
+
+    while (adamsession_sysaction_take(self->session, &sysact))
+        adam_window_run_sysaction(self, sysact);
+
+    gen = adamsession_gamepad_generation(self->session);
+    if (gen != self->pad_generation) {
+        char text[160];
+        self->pad_generation = gen;
+        if (adamsession_gamepad_last_event(self->session, text, sizeof text) > 0)
+            adam_window_toast(self, text);
+    }
+    return G_SOURCE_CONTINUE;
 }
 
 /* ---- actions ------------------------------------------------------------ */
@@ -213,7 +252,13 @@ static void on_active_changed(GObject *object, GParamSpec *pspec,
 const char *adam_window_help_context(AdamWindow *self)
 {
     AdwDialog *d = adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(self));
-    return d && ADW_IS_PREFERENCES_DIALOG(d) ? "prefs/Machine" : "main";
+    if (d && ADW_IS_PREFERENCES_DIALOG(d)) {
+        static char ctx[64];
+        const char *page = adw_preferences_dialog_get_visible_page_name(ADW_PREFERENCES_DIALOG(d));
+        g_snprintf(ctx, sizeof ctx, "prefs/%s", page ? page : "Machine");
+        return ctx;
+    }
+    return "main";
 }
 
 /* app.help: every window's Ctrl+Shift+H, for what it shows. Not a cast of
@@ -390,13 +435,13 @@ static void action_preferences(GSimpleAction *action, GVariant *param,
     adam_prefs_show(self, self->session, apply_display_settings);
 }
 
-static void action_keypad(GSimpleAction *action, GVariant *param,
-                          gpointer user_data)
+static void action_controllers(GSimpleAction *action, GVariant *param,
+                               gpointer user_data)
 {
     AdamWindow *self = ADAM_WINDOW(user_data);
     (void)action;
     (void)param;
-    adam_keypad_window_toggle(GTK_WINDOW(self), self->session);
+    adam_controllers_toggle(GTK_WINDOW(self), self->session);
 }
 
 static void action_debugger(GSimpleAction *action, GVariant *param,
@@ -450,7 +495,7 @@ static GMenu *build_menu(void)
     g_menu_append(fujinet, "FujiNet Console Log…", "win.fujinet-log");
     g_menu_append_section(menu, "FujiNet", G_MENU_MODEL(fujinet));
 
-    g_menu_append(view, "Controllers (F9)", "win.keypad");
+    g_menu_append(view, "Controllers (F9)", "win.controllers");
     g_menu_append(view, "Debugger (F12)", "win.debugger");
     g_menu_append_section(menu, "View", G_MENU_MODEL(view));
 
@@ -476,14 +521,25 @@ static const GActionEntry win_actions[] = {
     {.name = "fujinet-config", .activate = action_fujinet_config},
     {.name = "fujinet-log", .activate = action_fujinet_log},
     {.name = "preferences", .activate = action_preferences},
-    {.name = "keypad", .activate = action_keypad},
+    {.name = "controllers", .activate = action_controllers},
     {.name = "debugger", .activate = action_debugger},
     {.name = "about", .activate = action_about},
 };
 
+static void adam_window_dispose(GObject *object)
+{
+    AdamWindow *self = ADAM_WINDOW(object);
+
+    if (self->sysact_id) {
+        g_source_remove(self->sysact_id);
+        self->sysact_id = 0;
+    }
+    G_OBJECT_CLASS(adam_window_parent_class)->dispose(object);
+}
+
 static void adam_window_class_init(AdamWindowClass *klass)
 {
-    (void)klass;
+    G_OBJECT_CLASS(klass)->dispose = adam_window_dispose;
 }
 
 static void adam_window_init(AdamWindow *self)
@@ -578,11 +634,17 @@ GtkWidget *adam_window_new(AdwApplication *app, adamsession *session)
     apply_display_settings(self);
     gtk_widget_grab_focus(GTK_WIDGET(self->display));
 
+    /* The current pad set is the baseline: no toast for pads that were
+     * already plugged in at launch. */
+    self->pad_generation = adamsession_gamepad_generation(session);
+    self->sysact_id = g_timeout_add(50, sysact_drain_tick, self);
+
     /* Developer affordances: open the debugger / the controllers window
-     * alongside the main window (neither is shown unless asked for). */
+     * alongside the main window (neither is shown unless asked for).
+     * ADAM_OPEN_KEYPAD is the older name of ADAM_OPEN_CONTROLLERS. */
     if (getenv("ADAM_OPEN_DEBUGGER"))
         adam_debugger_show(GTK_WINDOW(self), session);
-    if (getenv("ADAM_OPEN_KEYPAD"))
-        adam_keypad_window_toggle(GTK_WINDOW(self), session);
+    if (getenv("ADAM_OPEN_CONTROLLERS") || getenv("ADAM_OPEN_KEYPAD"))
+        adam_controllers_toggle(GTK_WINDOW(self), session);
     return GTK_WIDGET(self);
 }

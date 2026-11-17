@@ -35,18 +35,20 @@ const char *adam_window_help_context(AdamWindow *self);
  * coloured text). */
 void adam_css_install(void);
 
-/* A system action (ADAM_SYSACT_*) from the keypad window, with the same
- * feedback as the Machine menu. */
+/* A system action (ADAM_SYSACT_*) from a key, a pad button or the
+ * Controllers window's strip, with the same feedback as the Machine menu.
+ * UI thread. */
 void adam_window_run_sysaction(AdamWindow *self, int sysact);
 
-/* The key path shared by the main and keypad windows. Step 1: Map-mode
- * capture, then the controller bindings (adamsession_input_key); TRUE = the
- * key is consumed. Step 3 (after a window's own shortcuts): type it on the
- * ADAM keyboard; TRUE = typed. */
-gboolean adam_window_input_key(adamsession *session, guint keyval,
-                               guint keycode, GdkModifierType state,
-                               gboolean down);
-gboolean adam_window_type_key(adamsession *session, guint keyval,
-                              GdkModifierType state);
+/* The one keyboard path: the main window's own key handler and the
+ * Controllers window's both end here, so Map mode, the controller bindings,
+ * F9 (Controllers), F10, F11, F12 and typing on the ADAM keyboard behave the
+ * same whichever has the focus. `keycode` is the GDK hardware keycode.
+ * Returns whether the key was consumed. */
+gboolean adam_window_key(AdamWindow *self, guint keyval, guint keycode,
+                         GdkModifierType state, gboolean down);
+
+/* Lets go of every key the keyboard holds (focus loss). */
+void adam_window_release_keys(AdamWindow *self);
 
 G_END_DECLS
