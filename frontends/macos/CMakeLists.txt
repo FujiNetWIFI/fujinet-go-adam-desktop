@@ -23,7 +23,7 @@ add_executable(fujinet-go-adam-macos MACOSX_BUNDLE
   KeyForward.m
   debugger/DebuggerWindow.m
   debugger/VideoTab.m
-  keypad/KeypadWindow.m
+  controllers/ControllersWindow.m
   ${MACOS_ICON}
 )
 set_target_properties(fujinet-go-adam-macos PROPERTIES

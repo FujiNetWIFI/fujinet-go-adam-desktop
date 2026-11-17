@@ -44,6 +44,7 @@ int main(int argc, const char *argv[])
         }
         adamsession_start_opts opts;
         adamsession_default_opts(session, &opts);
+        opts.enable_gamepad = adamsession_get_int(session, "enable_gamepad", 1);
         if (adamsession_start(session, &opts) != 0)
             fprintf(stderr, "session start: %s\n",
                     adamsession_last_error(session));

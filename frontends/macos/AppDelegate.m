@@ -17,9 +17,16 @@
 #import "KeyForward.h"
 #import "debugger/DebuggerWindow.h"
 #import "help/HelpWindow.h"
-#import "keypad/KeypadWindow.h"
+#import "controllers/ControllersWindow.h"
 
 #include <stdlib.h>
+
+/* How long a gamepad connect/disconnect or reset message stays over the
+ * picture. */
+#define TOAST_SECONDS 3.0
+
+/* The Help context of each Settings page. */
+static NSString *const kPageContexts[2] = { @"prefs/Machine", @"prefs/Input" };
 
 static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 {
@@ -44,13 +51,13 @@ static NSArray<NSString *> *machineSettingKeys(void)
       keys = @[
           @"machine", @"palette", @"expansion", @"joystick_mode",
           @"swap_buttons", @"reverse_keypad", @"fujinet_external",
-          @"fujinet_external_addr"
+          @"fujinet_external_addr", @"enable_gamepad"
       ];
     });
     return keys;
 }
 
-@interface AppDelegate () <NSWindowDelegate, WKUIDelegate>
+@interface AppDelegate () <NSWindowDelegate, WKUIDelegate, NSTabViewDelegate>
 @end
 
 @implementation AppDelegate {
@@ -65,6 +72,17 @@ static NSArray<NSString *> *machineSettingKeys(void)
     NSWindow *_settingsWindow;
     NSTextField *_externalField;
     BOOL _machineDirty;
+
+    ADAMControllersWindow *_controllers;
+    NSTextField *_toast;             /* over the picture, fades */
+    unsigned _toastGeneration;       /* the pad generation already toasted */
+    NSUInteger _toastSerial;
+    NSTimer *_sysactTimer;           /* console actions a gamepad posted, pad toasts */
+    id _keyMonitor;                  /* F9 in the machine window */
+    NSPopUpButton *_padList;         /* the Settings Input page's pad and its port */
+    NSPopUpButton *_padPort;
+    NSTimer *_padTimer;
+    unsigned _padListGeneration;
 }
 
 - (instancetype)initWithSession:(adamsession *)session
@@ -82,6 +100,7 @@ static NSArray<NSString *> *machineSettingKeys(void)
     adamsession_stop(_session);
     adamsession_start_opts opts;
     adamsession_default_opts(_session, &opts);
+    opts.enable_gamepad = adamsession_get_int(_session, "enable_gamepad", 1);
     if (adamsession_start(_session, &opts) != 0)
         NSLog(@"session restart: %s", adamsession_last_error(_session));
 }
@@ -285,10 +304,77 @@ static NSArray<NSString *> *machineSettingKeys(void)
     [DebuggerWindow toggleForSession:_session];
 }
 
-- (void)toggleKeypad:(id)sender
+- (void)toggleControllers:(id)sender
 {
     (void)sender;
-    [ADAMKeypadWindow toggleWithSession:_session];
+    [_controllers toggle];
+}
+
+/* ---- toast, console actions, the app's keys ---------------------------------- */
+
+- (void)showToast:(NSString *)text
+{
+    if (!text) return;
+    _toast.stringValue = text;
+    _toast.alphaValue = 1.0;
+    const NSUInteger serial = ++_toastSerial;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(TOAST_SECONDS * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        /* a newer message restarts the clock */
+        if (serial != self->_toastSerial) return;
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+            ctx.duration = 0.5;
+            self->_toast.animator.alphaValue = 0.0;
+        } completionHandler:nil];
+    });
+}
+
+/* A console action (ADAM_SYSACT_*) run on the UI thread, from the strip or a
+ * gamepad button (a bound key runs its action inside the session). */
+- (void)runSysaction:(int)sysact
+{
+    switch (sysact) {
+    case ADAM_SYSACT_RESET_COMPUTER:
+        adamsession_sysaction(_session, sysact);
+        [self showToast:@"Computer reset"];
+        break;
+    case ADAM_SYSACT_RESET_GAME:
+        adamsession_sysaction(_session, sysact);
+        [self showToast:@"Game reset"];
+        break;
+    default:
+        break;
+    }
+}
+
+/* What the 50 ms timer does: the console actions a gamepad button posted (the
+ * pad thread cannot touch AppKit), and a toast when a gamepad came or went. */
+- (void)sysactTick
+{
+    int sysact;
+    while (adamsession_sysaction_take(_session, &sysact)) [self runSysaction:sysact];
+    const unsigned gen = adamsession_gamepad_generation(_session);
+    if (gen != _toastGeneration) {
+        _toastGeneration = gen;
+        char msg[160];
+        if (adamsession_gamepad_last_event(_session, msg, (int)sizeof msg) > 0)
+            [self showToast:@(msg)];
+    }
+}
+
+/* F9 and F12 are the app's and not bindable; called with a key typed in the
+ * Controllers panel. YES when taken. */
+- (BOOL)handleAppKey:(uint32_t)keysym
+{
+    if (keysym == ADAMSESSION_KEYSYM_F9) {
+        [_controllers toggle];
+        return YES;
+    }
+    if (keysym == ADAMSESSION_KEYSYM_F12) {
+        [DebuggerWindow toggleForSession:_session];
+        return YES;
+    }
+    return NO;
 }
 
 /* ---- settings ------------------------------------------------------------- */
@@ -374,11 +460,177 @@ static NSArray<NSString *> *machineSettingKeys(void)
     _machineDirty = YES;
 }
 
+- (NSTextField *)noteLabel:(NSString *)text
+{
+    NSTextField *note = [NSTextField wrappingLabelWithString:text];
+    note.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    note.textColor = NSColor.secondaryLabelColor;
+    note.preferredMaxLayoutWidth = 400;
+    return note;
+}
+
+- (NSButton *)checkBoxForKey:(const char *)key title:(NSString *)title fallback:(int)def
+{
+    NSButton *box = [NSButton checkboxWithTitle:title
+                                         target:self
+                                         action:@selector(settingChanged:)];
+    box.state = adamsession_get_int(_session, key, def)
+                    ? NSControlStateValueOn
+                    : NSControlStateValueOff;
+    box.identifier = @(key);
+    return box;
+}
+
+/* ---- Settings: Input ------------------------------------------------------------ */
+
+- (void)refreshPadList
+{
+    const NSInteger sel = _padList.indexOfSelectedItem;
+    [_padList removeAllItems];
+    const int count = adamsession_gamepad_count(_session);
+    if (count == 0)
+        [[_padList menu] addItemWithTitle:@"(no gamepads connected - plug one in)" action:nil keyEquivalent:@""];
+    for (int idx = 0; idx < count; idx++) {
+        char name[128];
+        name[0] = '\0';
+        const int port = adamsession_gamepad_effective_port(_session, idx);
+        adamsession_gamepad_name(_session, idx, name, (int)sizeof name);
+        /* through the menu: a button's own addItemWithTitle: drops an earlier
+         * item of the same title, and two pads can share a name */
+        [[_padList menu] addItemWithTitle:(port >= 0
+            ? [NSString stringWithFormat:@"%d: %s  [controller %d]", idx + 1, name, port + 1]
+            : [NSString stringWithFormat:@"%d: %s  [unused]", idx + 1, name])
+                                   action:nil keyEquivalent:@""];
+    }
+    if (sel >= 0 && sel < count) [_padList selectItemAtIndex:sel];
+    [self padSelected:nil];
+}
+
+- (void)padSelected:(id)sender
+{
+    (void)sender;
+    const NSInteger sel = _padList.indexOfSelectedItem;
+    const BOOL have = sel >= 0 && sel < adamsession_gamepad_count(_session);
+    _padPort.enabled = have;
+    if (have) {
+        const int assign = adamsession_gamepad_assignment(_session, (int)sel);
+        [_padPort selectItemAtIndex:(assign < 0 || assign >= ADAM_PORTS ? 0 : assign + 1)];
+    }
+}
+
+- (void)padPortChanged:(id)sender
+{
+    (void)sender;
+    const NSInteger sel = _padList.indexOfSelectedItem;
+    if (sel >= 0 && sel < adamsession_gamepad_count(_session))
+        adamsession_gamepad_assign(_session, (int)sel, (int)_padPort.indexOfSelectedItem - 1);
+    [self refreshPadList];
+}
+
+- (void)resetControls:(id)sender
+{
+    (void)sender;
+    adamsession_bindings_reset(_session);
+    [_controllers refresh];
+    [self showToast:@"Default controls restored"];
+}
+
+- (void)openControllers:(id)sender
+{
+    (void)sender;
+    [_controllers show];
+}
+
+/* A page of the Settings tabs: a two-column grid (labels trailing, controls
+ * leading) at the top left, and the page's Help button at the bottom left. */
+- (NSView *)pageWithRows:(NSArray<NSArray<NSView *> *> *)rows help:(NSString *)context
+{
+    NSGridView *grid = [NSGridView gridViewWithViews:rows];
+    grid.rowSpacing = 8;
+    grid.columnSpacing = 12;
+    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
+    grid.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSView *holder = [[NSView alloc] init];
+    [holder addSubview:grid];
+    [grid.leadingAnchor constraintEqualToAnchor:holder.leadingAnchor constant:20].active = YES;
+    [grid.topAnchor constraintEqualToAnchor:holder.topAnchor constant:20].active = YES;
+
+    NSButton *help = AdamHelpButton(context);
+    help.translatesAutoresizingMaskIntoConstraints = NO;
+    [holder addSubview:help];
+    [help.leadingAnchor constraintEqualToAnchor:holder.leadingAnchor constant:20].active = YES;
+    [help.bottomAnchor constraintEqualToAnchor:holder.bottomAnchor constant:-16].active = YES;
+    return holder;
+}
+
+- (NSView *)inputPage
+{
+    _padList = [[NSPopUpButton alloc] init];
+    _padList.target = self;
+    _padList.action = @selector(padSelected:);
+    _padPort = [[NSPopUpButton alloc] init];
+    [_padPort addItemsWithTitles:@[@"Automatic", @"Controller 1", @"Controller 2"]];
+    _padPort.target = self;
+    _padPort.action = @selector(padPortChanged:);
+    NSStackView *padRow = [NSStackView stackViewWithViews:@[ _padList, _padPort ]];
+    padRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+
+    NSButton *reset = [NSButton buttonWithTitle:@"Reset Controls" target:self action:@selector(resetControls:)];
+    NSButton *open = [NSButton buttonWithTitle:@"Open Controllers" target:self action:@selector(openControllers:)];
+    NSStackView *buttons = [NSStackView stackViewWithViews:@[ reset, open ]];
+    buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+
+    NSArray<NSArray<NSView *> *> *rows = @[
+        @[ [self sectionLabel:@"Controllers"], [NSTextField labelWithString:@""] ],
+        @[ [NSTextField labelWithString:@""],
+           [self checkBoxForKey:"enable_gamepad" title:@"Enable gamepads" fallback:1] ],
+        @[ [NSTextField labelWithString:@"Gamepads"], padRow ],
+        @[ [self sectionLabel:@"Controls"], [NSTextField labelWithString:@""] ],
+        @[ [NSTextField labelWithString:@""], buttons ],
+        @[ [NSTextField labelWithString:@""],
+           [self noteLabel:@"Keys and gamepad buttons are re-mapped in the Controllers window "
+                           @"(View > Controllers, Cmd+K or F9): click Map, choose a control, then press "
+                           @"the key or the gamepad button. Reset Controls puts the defaults back. "
+                           @"Gamepads on or off apply by restarting the session when this window is "
+                           @"closed; a gamepad's controller applies at once."] ],
+    ];
+    return [self pageWithRows:rows help:kPageContexts[1]];
+}
+
+/* Hot-plugged gamepads, twice a second, while the window is open. */
+- (void)startPadTimer
+{
+    if (_padTimer) return;
+    _padListGeneration = adamsession_gamepad_generation(_session);
+    [self refreshPadList];
+    __weak AppDelegate *weakSelf = self;
+    _padTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *tmr) {
+        (void)tmr;
+        AppDelegate *strong = weakSelf;
+        if (!strong) return;
+        const unsigned gen = adamsession_gamepad_generation(strong->_session);
+        if (gen != strong->_padListGeneration) {
+            strong->_padListGeneration = gen;
+            [strong refreshPadList];
+        }
+    }];
+    _padTimer.tolerance = 0.25;
+}
+
+/* The Help button and Command+? open the page being shown. */
+- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)item
+{
+    const NSInteger idx = [tabView indexOfTabViewItem:item];
+    if (idx >= 0 && idx < 2) AdamSetHelpContext(_settingsWindow, kPageContexts[idx]);
+}
+
 - (void)showSettings:(id)sender
 {
     (void)sender;
     if (_settingsWindow) {
         [_settingsWindow makeKeyAndOrderFront:nil];
+        [self startPadTimer];
         return;
     }
 
@@ -484,8 +736,26 @@ static NSArray<NSString *> *machineSettingKeys(void)
     root.spacing = 12;
     root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
 
+    /* the settings over a strip with the Help button: the Machine tab */
+    NSButton *helpBtn = AdamHelpButton(kPageContexts[0]);
+    NSStackView *machinePage = [NSStackView stackViewWithViews:@[root, helpBtn]];
+    machinePage.orientation = NSUserInterfaceLayoutOrientationVertical;
+    machinePage.alignment = NSLayoutAttributeLeading;
+    machinePage.edgeInsets = NSEdgeInsetsMake(0, 16, 12, 16);
+
+    NSTabView *tabs = [[NSTabView alloc] initWithFrame:NSMakeRect(0, 0, 560, 520)];
+    NSArray *pages = @[ @[ @"Machine", machinePage ],
+                        @[ @"Input", [self inputPage] ] ];
+    for (NSArray *page in pages) {
+        NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:page[0]];
+        item.label = page[0];
+        item.view = page[1];
+        [tabs addTabViewItem:item];
+    }
+    tabs.delegate = self;
+
     _settingsWindow = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(0, 0, 520, 420)
+        initWithContentRect:NSMakeRect(0, 0, 560, 520)
                   styleMask:NSWindowStyleMaskTitled |
                             NSWindowStyleMaskClosable |
                             NSWindowStyleMaskMiniaturizable
@@ -494,18 +764,11 @@ static NSArray<NSString *> *machineSettingKeys(void)
     _settingsWindow.title = @"Settings";
     _settingsWindow.releasedWhenClosed = NO;
     _settingsWindow.delegate = self;
-    {
-        /* the settings over a strip with the Help button */
-        NSButton *helpBtn = AdamHelpButton(@"prefs/Machine");
-        NSStackView *wrap = [NSStackView stackViewWithViews:@[root, helpBtn]];
-        wrap.orientation = NSUserInterfaceLayoutOrientationVertical;
-        wrap.alignment = NSLayoutAttributeLeading;
-        wrap.edgeInsets = NSEdgeInsetsMake(0, 16, 12, 16);
-        _settingsWindow.contentView = wrap;
-        AdamSetHelpContext(_settingsWindow, @"prefs/Machine");
-    }
+    _settingsWindow.contentView = tabs;
+    AdamSetHelpContext(_settingsWindow, kPageContexts[0]);
     [_settingsWindow center];
     [_settingsWindow makeKeyAndOrderFront:nil];
+    [self startPadTimer];
 }
 
 /* Machine options are collected while the window is open and applied in one
@@ -514,8 +777,11 @@ static NSArray<NSString *> *machineSettingKeys(void)
 {
     if (note.object == _window)
         [self saveWindowSize];
-    if (note.object == _settingsWindow)
+    if (note.object == _settingsWindow) {
         [_settingsWindow makeFirstResponder:nil]; /* commit a field edit */
+        [_padTimer invalidate];
+        _padTimer = nil;
+    }
     if (note.object != _settingsWindow || !_machineDirty)
         return;
     _machineDirty = NO;
@@ -635,7 +901,7 @@ static NSArray<NSString *> *machineSettingKeys(void)
     fs.keyEquivalentModifierMask =
         NSEventModifierFlagControl | NSEventModifierFlagCommand;
     [view addItem:[self item:@"Controllers"
-                      action:@selector(toggleKeypad:)
+                      action:@selector(toggleControllers:)
                          key:@"k"]];
     NSMenuItem *dbg = [self item:@"Debugger"
                           action:@selector(toggleDebugger:)
@@ -725,11 +991,38 @@ static NSArray<NSString *> *machineSettingKeys(void)
     _window.contentMinSize =
         NSMakeSize(ADAMSESSION_FB_WIDTH, ADAMSESSION_FB_HEIGHT);
 
+    /* layer-backed, so the display's layer and the toast over it composite in
+     * the order they were added */
+    [(NSView *)_window.contentView setWantsLayer:YES];
     _display = [[DisplayView alloc] initWithSession:_session];
     _display.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _display.frame = ((NSView *)_window.contentView).bounds;
     [_window.contentView addSubview:_display];
     [self applyDisplaySettings];
+
+    /* The toast: a label over the top of the picture that fades. */
+    {
+        NSView *content = _window.contentView;
+        _toast = [NSTextField labelWithString:@""];
+        _toast.font = [NSFont boldSystemFontOfSize:13];
+        _toast.textColor = NSColor.whiteColor;
+        _toast.drawsBackground = YES;
+        _toast.backgroundColor = [NSColor colorWithWhite:0.0 alpha:0.7];
+        _toast.alignment = NSTextAlignmentCenter;
+        _toast.alphaValue = 0.0;
+        [_toast setFrame:NSMakeRect(0, content.bounds.size.height - 34, content.bounds.size.width, 26)];
+        [_toast setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+        [content addSubview:_toast];
+    }
+
+    __weak AppDelegate *weakDelegate = self;
+    _controllers = [[ADAMControllersWindow alloc] initWithSession:_session
+                                                          appKeys:^BOOL(uint32_t keysym) {
+        return [weakDelegate handleAppKey:keysym];
+    }];
+    _controllers.sysactionHandler = ^(int sysact) { [weakDelegate runSysaction:sysact]; };
+    /* No toast for the pads already attached at launch. */
+    _toastGeneration = adamsession_gamepad_generation(_session);
 
     [_window center];
     [_window makeKeyAndOrderFront:nil];
@@ -739,8 +1032,30 @@ static NSArray<NSString *> *machineSettingKeys(void)
     /* Developer affordance shared with the other frontends. */
     if (getenv("ADAM_OPEN_DEBUGGER"))
         [DebuggerWindow showForSession:_session];
-    if (getenv("ADAM_OPEN_KEYPAD"))
-        [ADAMKeypadWindow toggleWithSession:_session];
+    /* (the old keypad name still works) */
+    if (getenv("ADAM_OPEN_CONTROLLERS") || getenv("ADAM_OPEN_KEYPAD"))
+        [_controllers toggle];
+
+    /* Console actions a gamepad posted and pads coming and going: well inside
+     * 50 ms. */
+    _sysactTimer = [NSTimer scheduledTimerWithTimeInterval:0.05
+        repeats:YES block:^(NSTimer *tmr) { (void)tmr; [weakDelegate sysactTick]; }];
+    _sysactTimer.tolerance = 0.01;
+
+    /* F9 in the machine window opens the Controllers panel (the panel handles
+     * its own F9; the debugger keeps F9 for breakpoints). */
+    _keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+        handler:^NSEvent *(NSEvent *evt) {
+            AppDelegate *strong = weakDelegate;
+            if (strong && evt.window == strong->_window && !evt.isARepeat &&
+                !(evt.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl |
+                                       NSEventModifierFlagOption | NSEventModifierFlagShift)) &&
+                adamsession_keysym_from_macos_keycode(evt.keyCode) == ADAMSESSION_KEYSYM_F9) {
+                [strong->_controllers toggle];
+                return nil;
+            }
+            return evt;
+        }];
 }
 
 /* The window's content size for the next start (not while fullscreen). */
@@ -761,6 +1076,12 @@ static NSArray<NSString *> *machineSettingKeys(void)
     (void)note;
     [self saveWindowSize];
     [_logTimer invalidate];
+    [_sysactTimer invalidate];
+    [_padTimer invalidate];
+    if (_keyMonitor) {
+        [NSEvent removeMonitor:_keyMonitor];
+        _keyMonitor = nil;
+    }
     [_display stop];
     if (_activity) {
         [[NSProcessInfo processInfo] endActivity:_activity];

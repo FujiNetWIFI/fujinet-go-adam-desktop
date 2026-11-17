@@ -1,5 +1,5 @@
 /*
- * The keyboard path shared by the machine window and the keypad panel: AppKit
+ * The keyboard path shared by the machine window and the Controllers panel: AppKit
  * key events to X11 keysyms, then the session's input_key first (bound
  * controller keys, system actions, the Ctrl+digit chord) and the ADAM
  * keyboard for whatever it does not consume.
