@@ -163,6 +163,7 @@ static void *emu_thread_main(void *arg)
     const int pace_log = getenv("ADAM_PACE_LOG") != NULL;
 
     adam_thread_setname("adam-emu");
+    apple_realtime_begin(1e9 / 60.0);   /* a real-time slot on macOS; a no-op elsewhere */
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.os7_rom_data = adam_rom_os7;

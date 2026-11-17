@@ -57,6 +57,7 @@ static NSArray<NSString *> *machineSettingKeys(void)
     adamsession *_session;
     NSWindow *_window;
     DisplayView *_display;
+    id<NSObject> _activity;          /* no App Nap, no timer coalescing while we run */
     NSWindow *_configWindow;
     NSWindow *_logWindow;
     NSTextView *_logView;
@@ -695,6 +696,13 @@ static NSArray<NSString *> *machineSettingKeys(void)
 - (void)applicationDidFinishLaunching:(NSNotification *)note
 {
     (void)note;
+
+    /* An emulator is latency-critical work: App Nap must not throttle the
+     * machine thread or coalesce its timers when the window is behind
+     * another, and Game Mode (Info.plist) asks the system to favour it. */
+    _activity = [[NSProcessInfo processInfo]
+        beginActivityWithOptions:(NSActivityUserInitiated | NSActivityLatencyCritical)
+                          reason:@"Emulating an ADAM"];
     [self buildMenus];
 
     NSRect frame = NSMakeRect(0, 0, 1088, 902);
@@ -754,6 +762,10 @@ static NSArray<NSString *> *machineSettingKeys(void)
     [self saveWindowSize];
     [_logTimer invalidate];
     [_display stop];
+    if (_activity) {
+        [[NSProcessInfo processInfo] endActivity:_activity];
+        _activity = nil;
+    }
     adamsession_stop(_session);
 }
 

@@ -36,6 +36,7 @@ target_link_libraries(fujinet-go-adam-macos PRIVATE
   "-framework Cocoa"
   "-framework CoreVideo"
   "-framework QuartzCore"
+  "-framework Metal"        # the picture is a texture on a CAMetalLayer
   "-framework UniformTypeIdentifiers"
   "-framework WebKit"
 )
