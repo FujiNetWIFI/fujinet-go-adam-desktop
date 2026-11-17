@@ -47,6 +47,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.16.0" date="2026-11-17">
+      <description>
+        <p>
+          The Controllers window is drawn like the real ADAM controllers: click the keys, drag the stick, and held controls light up. A new ADAM keyboard view (Keyboard check box) has the SmartKeys, the editing block and latching SHIFT, CONTROL and LOCK.
+        </p>
+        <p>
+          USB gamepads can be assigned to a controller port, including plain HID adapters. The assignment is remembered, and a toast shows when a pad is plugged in or removed. There is a new Input page in the settings.
+        </p>
+      </description>
+    </release>
     <release version="0.15.0" date="2026-11-16">
       <description>
         <p>
