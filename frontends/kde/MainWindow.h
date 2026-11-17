@@ -7,11 +7,11 @@
 
 #include <QCloseEvent>
 #include <QMainWindow>
+#include <QTimer>
 
 #include "adamsession.h"
 
 class DisplayView;
-class KeypadWindow;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -33,7 +33,10 @@ private:
     void loadCartridge();
     void ejectCartridge();
     void toggleFullscreen();
-    void toggleKeypad();
+    void toggleControllers();
+    /* the news the gamepad thread leaves: console actions and hot-plugs */
+    void tick();
+    void runSysaction(int sysact);
     void showPreferences();
     void showFujiNetConfig();
     void showFujiNetLog();
@@ -41,5 +44,6 @@ private:
 
     adamsession *m_session;
     DisplayView *m_display;
-    KeypadWindow *m_keypad = nullptr;
+    QTimer m_tickTimer;
+    unsigned m_padGen = 0;
 };

@@ -33,7 +33,7 @@ int main(int argc, char *argv[])
         QIcon(QStringLiteral(ADAM_ICON_FILE))));
 #endif
 
-    /* Toggled-on push buttons (Map, the keypad's held controls) wear the
+    /* Toggled-on push buttons (Map while armed, the remap target) wear the
      * accent colour with black text, light or dark. The rule spells out the
      * whole box: with only a background colour the style still draws its own
      * bevel, which darkens it (Breeze), lightens it (Fusion) or ignores it
@@ -44,7 +44,10 @@ int main(int argc, char *argv[])
         QStringLiteral(
             "QPushButton:checked { background-color: %1; color: black;"
             " border: 1px solid %3; border-radius: 4px; padding: 4px 12px; }"
-            "QPushButton:checked:hover { background-color: %2; }")
+            "QPushButton:checked:hover { background-color: %2; }"
+            "QPushButton[accent=\"true\"] { background-color: %1; color: black;"
+            " border: 1px solid %3; border-radius: 4px; padding: 4px 12px; }"
+            "QPushButton[accent=\"true\"]:hover { background-color: %2; }")
             .arg(accent.name(), accent.lighter(112).name(),
                  accent.darker(140).name()));
 
@@ -61,7 +64,7 @@ int main(int argc, char *argv[])
 
     int rc;
     {
-        /* The windows go before the session does: the keypad window still
+        /* The windows go before the session does: the Controllers window still
          * calls into it as it is hidden. */
         MainWindow win(session);
         win.show();

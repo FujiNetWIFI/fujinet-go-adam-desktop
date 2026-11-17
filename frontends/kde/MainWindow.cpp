@@ -26,7 +26,7 @@
 #include "help/HelpWindow.h"
 #include "SettingsDialog.h"
 #include "debugger/DebuggerWindow.h"
-#include "keypad/KeypadWindow.h"
+#include "controllers/ControllersWindow.h"
 
 MainWindow::MainWindow(adamsession *session, QWidget *parent)
     : QMainWindow(parent), m_session(session)
@@ -55,9 +55,17 @@ MainWindow::MainWindow(adamsession *session, QWidget *parent)
     if (getenv("ADAM_OPEN_DEBUGGER"))
         DebuggerWindow::showFor(this, m_session);
     /* ... and the Controllers window, once this window is up to be its
-     * parent. */
-    if (getenv("ADAM_OPEN_KEYPAD"))
-        QTimer::singleShot(0, this, &MainWindow::toggleKeypad);
+     * parent (ADAM_OPEN_KEYPAD is its old name). */
+    if (getenv("ADAM_OPEN_CONTROLLERS") || getenv("ADAM_OPEN_KEYPAD"))
+        QTimer::singleShot(0, this, &MainWindow::toggleControllers);
+
+    /* One timer for the news the other threads leave: the gamepad thread
+     * cannot call into Qt, so it posts console actions and hot-plug events
+     * and this takes them. The baseline keeps pads already attached from
+     * announcing themselves. */
+    m_padGen = adamsession_gamepad_generation(session);
+    connect(&m_tickTimer, &QTimer::timeout, this, &MainWindow::tick);
+    m_tickTimer.start(50);
 }
 
 void MainWindow::useSoftwareDisplay()
@@ -92,16 +100,10 @@ void MainWindow::restartSession()
 void MainWindow::buildMenus()
 {
     QMenu *machine = menuBar()->addMenu(QStringLiteral("&Machine"));
-    machine->addAction(QStringLiteral("Reset Computer (ADAM)"), this, [this] {
-        adamsession_reset(m_session, 0);
-        statusBar()->showMessage(QStringLiteral("Computer reset"), 3000);
-    });
+    machine->addAction(QStringLiteral("Reset Computer (ADAM)"), this,
+                       [this] { runSysaction(ADAM_SYSACT_RESET_COMPUTER); });
     machine->addAction(QStringLiteral("Reset Game (ColecoVision)"), this,
-                       [this] {
-                           adamsession_reset(m_session, 1);
-                           statusBar()->showMessage(
-                               QStringLiteral("Game reset"), 3000);
-                       });
+                       [this] { runSysaction(ADAM_SYSACT_RESET_GAME); });
     machine->addSeparator();
     machine->addAction(QStringLiteral("&Preferences…"), this,
                        &MainWindow::showPreferences);
@@ -124,7 +126,7 @@ void MainWindow::buildMenus()
     view->addAction(QStringLiteral("Fullscreen"), QKeySequence(Qt::Key_F11),
                     this, &MainWindow::toggleFullscreen);
     view->addAction(QStringLiteral("Controllers"), QKeySequence(Qt::Key_F9),
-                    this, &MainWindow::toggleKeypad);
+                    this, &MainWindow::toggleControllers);
     view->addAction(QStringLiteral("Debugger"), QKeySequence(Qt::Key_F12),
                     this,
                     [this] { DebuggerWindow::toggleFor(this, m_session); });
@@ -171,16 +173,42 @@ void MainWindow::toggleFullscreen()
     }
 }
 
-void MainWindow::toggleKeypad()
+void MainWindow::toggleControllers()
 {
-    if (!m_keypad)
-        m_keypad = new KeypadWindow(m_session, this);
-    if (m_keypad->isVisible()) {
-        m_keypad->hide();
-    } else {
-        m_keypad->show();
-        m_keypad->raise();
-        m_keypad->activateWindow();
+    /* Hidden, not destroyed: a remap in progress and the window's position
+     * both survive closing it. */
+    adamControllersToggle(this, m_session);
+}
+
+void MainWindow::tick()
+{
+    int sysact;
+    while (adamsession_sysaction_take(m_session, &sysact))
+        runSysaction(sysact);
+
+    const unsigned gen = adamsession_gamepad_generation(m_session);
+    if (gen != m_padGen) {
+        m_padGen = gen;
+        char msg[160];
+        if (adamsession_gamepad_last_event(m_session, msg, sizeof msg) > 0)
+            statusBar()->showMessage(QString::fromUtf8(msg), 4000);
+    }
+}
+
+/* A console action, from a key, a pad button, the Controllers window or the
+ * menu: always here, on the UI thread. */
+void MainWindow::runSysaction(int sysact)
+{
+    switch (sysact) {
+    case ADAM_SYSACT_RESET_COMPUTER:
+        adamsession_sysaction(m_session, sysact);
+        statusBar()->showMessage(QStringLiteral("Computer reset"), 3000);
+        break;
+    case ADAM_SYSACT_RESET_GAME:
+        adamsession_sysaction(m_session, sysact);
+        statusBar()->showMessage(QStringLiteral("Game reset"), 3000);
+        break;
+    default: break;
     }
 }
 
@@ -239,6 +267,9 @@ void MainWindow::showPreferences()
     const bool machineChanged = dialog.exec() == QDialog::Accepted &&
                                 dialog.machineOptionsChanged();
     applyDisplaySettings();
+    adamControllersRefresh();
+    if (dialog.openControllersRequested())
+        adamControllersShow(this, m_session);
     if (machineChanged) {
         restartSession();
         statusBar()->showMessage(
@@ -251,6 +282,7 @@ void MainWindow::showPreferences()
  * maximized or fullscreen window keeps the size it had before. */
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    m_tickTimer.stop();
     const bool maximized = isMaximized();
     if (!maximized && !isFullScreen() && width() >= 200 && height() >= 200) {
         adamsession_set_int(m_session, "window_width", width());

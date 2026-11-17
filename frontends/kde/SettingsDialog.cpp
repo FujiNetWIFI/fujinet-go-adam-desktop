@@ -16,9 +16,13 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPushButton>
+#include <QTabWidget>
+#include <QTimer>
 #include <QShortcut>
 #include <QVBoxLayout>
 
@@ -104,11 +108,122 @@ SettingsDialog::SettingsDialog(adamsession *session, QWidget *parent)
     connect(buttons, &QDialogButtonBox::rejected, this,
             &SettingsDialog::reject);
 
+    auto *general = new QWidget(this);
+    auto *generalLayout = new QVBoxLayout(general);
+    generalLayout->addWidget(machineBox);
+    generalLayout->addWidget(fujinetBox);
+    generalLayout->addWidget(displayBox);
+    generalLayout->addStretch(1);
+
+    auto *tabs = new QTabWidget(this);
+    tabs->addTab(general, QStringLiteral("General"));
+    tabs->addTab(buildInputPage(), QStringLiteral("Input"));
+    connect(tabs, &QTabWidget::currentChanged, this, [this](int page) {
+        setProperty("adamHelpContext", page == 1 ? QStringLiteral("prefs/Input")
+                                                 : QStringLiteral("prefs/Machine"));
+    });
+
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(machineBox);
-    layout->addWidget(fujinetBox);
-    layout->addWidget(displayBox);
+    layout->addWidget(tabs);
     layout->addWidget(buttons);
+}
+
+/* The Input page: one row per pad (its controller, applied at once and
+ * remembered, so not part of what OK restarts for), Reset Controls and Open
+ * Controllers. Keys and gamepad buttons are re-mapped in the Controllers
+ * window. */
+QWidget *SettingsDialog::buildInputPage()
+{
+    auto *page = new QWidget(this);
+    auto *pageLayout = new QVBoxLayout(page);
+
+    auto *padsBox = new QGroupBox(QStringLiteral("Gamepads"), page);
+    auto *padsLayout = new QVBoxLayout(padsBox);
+    auto *padsNote = new QLabel(
+        QStringLiteral("The first pad is Controller 1, the next Controller 2, unless chosen here."), padsBox);
+    padsNote->setWordWrap(true);
+    padsLayout->addWidget(padsNote);
+    m_padForm = new QFormLayout;
+    padsLayout->addLayout(m_padForm);
+    pageLayout->addWidget(padsBox);
+    m_padGen = adamsession_gamepad_generation(m_session);
+    rebuildPads();
+    auto *padTimer = new QTimer(this);
+    connect(padTimer, &QTimer::timeout, this, [this] {
+        const unsigned gen = adamsession_gamepad_generation(m_session);
+        if (gen == m_padGen) return;
+        m_padGen = gen;
+        rebuildPads();
+    });
+    padTimer->start(1000);
+
+    auto *controls = new QGroupBox(QStringLiteral("Controls"), page);
+    auto *controlsLayout = new QVBoxLayout(controls);
+    auto *controlsNote = new QLabel(
+        QStringLiteral("Keys and gamepad buttons are re-mapped in the Controllers window (Map)."), controls);
+    controlsNote->setWordWrap(true);
+    controlsLayout->addWidget(controlsNote);
+    auto *row = new QHBoxLayout;
+    auto *resetControls = new QPushButton(QStringLiteral("Reset Controls"), controls);
+    resetControls->setToolTip(QStringLiteral("Put every key and gamepad button back to its default"));
+    auto *openWindow = new QPushButton(QStringLiteral("Open Controllers"), controls);
+    openWindow->setToolTip(QStringLiteral("Close Preferences and open the Controllers window"));
+    row->addWidget(resetControls);
+    row->addWidget(openWindow);
+    row->addStretch(1);
+    controlsLayout->addLayout(row);
+    auto *state = new QLabel(controls);
+    controlsLayout->addWidget(state);
+    pageLayout->addWidget(controls);
+    pageLayout->addStretch(1);
+
+    connect(resetControls, &QPushButton::clicked, this, [this, state] {
+        adamsession_bindings_reset(m_session);
+        state->setText(QStringLiteral("Every key and gamepad button is back to its default."));
+    });
+    connect(openWindow, &QPushButton::clicked, this, [this] {
+        m_openControllers = true;
+        accept();
+    });
+    return page;
+}
+
+void SettingsDialog::rebuildPads()
+{
+    for (QWidget *row : m_padRows)
+        m_padForm->removeRow(row);
+    m_padRows.clear();
+    const int count = adamsession_gamepad_count(m_session);
+    if (count == 0) {
+        auto *none = new QLabel(QStringLiteral(
+            "No gamepads connected - plug one in: it is picked up as it appears."));
+        none->setWordWrap(true);
+        none->setStyleSheet(QStringLiteral("color: gray;"));
+        m_padForm->addRow(none);
+        m_padRows.push_back(none);
+        return;
+    }
+    for (int idx = 0; idx < count && idx < 8; ++idx) {
+        char name[128];
+        adamsession_gamepad_name(m_session, idx, name, sizeof name);
+        auto *box = new QComboBox;
+        box->addItems({QStringLiteral("Automatic"), QStringLiteral("Controller 1"),
+                       QStringLiteral("Controller 2")});
+        const int assign = adamsession_gamepad_assignment(m_session, idx);
+        box->setCurrentIndex(assign < 0 || assign > 1 ? 0 : assign + 1);
+        auto tip = [this, idx](QComboBox *combo) {
+            const int eff = adamsession_gamepad_effective_port(m_session, idx);
+            combo->setToolTip(eff >= 0 ? QStringLiteral("Driving controller %1").arg(eff + 1)
+                                       : QStringLiteral("Driving nothing"));
+        };
+        tip(box);
+        connect(box, &QComboBox::currentIndexChanged, box, [this, idx, box, tip](int sel) {
+            adamsession_gamepad_assign(m_session, idx, sel <= 0 ? -1 : sel - 1);
+            tip(box);
+        });
+        m_padForm->addRow(QString::fromUtf8(name), box);
+        m_padRows.push_back(box);
+    }
 }
 
 QComboBox *SettingsDialog::addCombo(QFormLayout *form, const QString &label,

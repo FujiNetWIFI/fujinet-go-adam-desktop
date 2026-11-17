@@ -19,3 +19,7 @@ uint32_t adamKeysymFromQt(const QKeyEvent *event);
 /* Press or release: the session's controller bindings first, then (press
  * only) the ADAM keyboard. True when the event was consumed. */
 bool adamForwardKey(adamsession *session, QKeyEvent *event, bool down);
+
+/* The app's own keys: F9 (Controllers), F10 (menu), F11 (fullscreen) and F12
+ * (Debugger). They are never typed on the ADAM and cannot be bound. */
+bool adamIsAppKey(const QKeyEvent *event);

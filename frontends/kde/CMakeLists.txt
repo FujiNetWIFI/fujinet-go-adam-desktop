@@ -23,7 +23,7 @@ add_executable(fujinet-go-adam-kde
   FujiNetWindows.cpp
   help/HelpWindow.cpp
   KeyForward.cpp
-  keypad/KeypadWindow.cpp
+  controllers/ControllersWindow.cpp
   debugger/DebuggerWindow.cpp
   debugger/VideoTab.cpp
 )
@@ -50,13 +50,24 @@ endif()
 # The key translation and the Controllers window, on the offscreen platform.
 find_package(Qt6 COMPONENTS Test QUIET)
 if(Qt6Test_FOUND)
-  add_executable(keypad_test keypad_test.cpp KeyForward.cpp
-                 keypad/KeypadWindow.cpp help/HelpWindow.cpp)
+  add_executable(keypad_test keypad_test.cpp KeyForward.cpp)
   target_link_libraries(keypad_test PRIVATE adamsession Qt6::Widgets Qt6::Test)
   target_include_directories(keypad_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_options(keypad_test PRIVATE -Wall -Wextra)
   add_test(NAME keypad_kde COMMAND keypad_test)
   set_tests_properties(keypad_kde PROPERTIES
+                       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+  # The Controllers window, offscreen, on an SDL virtual gamepad (no machine):
+  # skips (77) where SDL has no virtual joysticks.
+  add_executable(controllers_test_kde controllers_test.cpp controllers/ControllersWindow.cpp
+                 KeyForward.cpp help/HelpWindow.cpp debugger/DebuggerWindow.cpp debugger/VideoTab.cpp)
+  target_link_libraries(controllers_test_kde PRIVATE adamsession Qt6::Widgets Qt6::Test Qt6::GuiPrivate)
+  target_include_directories(controllers_test_kde PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_compile_options(controllers_test_kde PRIVATE -Wall -Wextra)
+  add_test(NAME controllers_kde COMMAND controllers_test_kde)
+  set_tests_properties(controllers_kde PROPERTIES
+                       SKIP_RETURN_CODE 77 TIMEOUT 60
                        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
@@ -66,7 +77,7 @@ endif()
 if(Qt6Test_FOUND)
   add_executable(debugger_test debugger_test.cpp FujiNetWindows.cpp
                  debugger/DebuggerWindow.cpp debugger/VideoTab.cpp MainWindow.cpp DisplayWidget.cpp
-                 SoftDisplayWidget.cpp FrameFeed.cpp SettingsDialog.cpp KeyForward.cpp keypad/KeypadWindow.cpp
+                 SoftDisplayWidget.cpp FrameFeed.cpp SettingsDialog.cpp KeyForward.cpp controllers/ControllersWindow.cpp
                  help/HelpWindow.cpp)
   target_link_libraries(debugger_test PRIVATE adamsession Qt6::Widgets
                         Qt6::GuiPrivate Qt6::Test)

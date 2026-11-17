@@ -7,6 +7,12 @@
 
 #include "KeyForward.h"
 
+bool adamIsAppKey(const QKeyEvent *event)
+{
+    const int k = event->key();
+    return k >= Qt::Key_F9 && k <= Qt::Key_F12;
+}
+
 uint32_t adamKeysymFromQt(const QKeyEvent *event)
 {
     /* On X11 and Wayland Qt reports the X keycode: the evdev code plus 8. */
