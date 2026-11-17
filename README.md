@@ -34,22 +34,31 @@ platforms are very welcome.
 - In-process FujiNet: disk/DDP mounting, TNFS hosts, and network config
   through the embedded FujiNet web UI (`FujiNet ▸ Configuration`), plus a
   live console-log window.
-- Controllers (`F9`, ⌘K on macOS): a floating window with both ColecoVision
-  controllers — keypad, stick and fire buttons — to click, and **Map** to
-  rebind any control to a key or a gamepad button (**Clear** unbinds it,
-  **Defaults** restores the map). Controller 1's stick is on the numeric
-  keypad by default (8/4/6/2, `0` = left fire, `Enter` = right fire, `*` and
-  `/` = the keypad's `*` and `#`); every other key types on the ADAM's
-  keyboard, and `Ctrl+digit` still presses the keypad's digit (game select).
-- Automatic gamepad support with hotplug (SDL3; A = left fire, B = right
-  fire, left stick or d-pad steer; the other buttons can be mapped).
+- Controllers (`F9`, ⌘K on macOS): a floating, fixed-size window that draws
+  both ColecoVision controllers in the ADAM's cream — stick, fire buttons and
+  keypad — to click and drag, with held controls lit. **Map** rebinds any
+  control (38 in all) to a key or a gamepad button (**Clear** unbinds it,
+  **Defaults** restores the map, **Show bindings** prints each control's key
+  on it). A **Keyboard** check box adds the ADAM's keyboard: SmartKeys I–VI,
+  the editing block and the arrows, with latching SHIFT and CONTROL and a
+  LOCK key.
+- Default keys: Controller 1's stick is on the numeric keypad (8/4/6/2,
+  `0` = left fire, `Enter` = right fire, `*` and `/` = the keypad's `*` and
+  `#`); every other key types on the ADAM's keyboard, and `Ctrl+digit` still
+  presses the keypad's digit (game select).
+- Gamepads with hotplug (SDL3, including plain USB adapters): the D-pad or
+  left stick steers, A = left fire, B = right fire, and the other buttons can
+  be mapped. Each pad drives Controller 1, the next Controller 2, or the one
+  you pick (*Automatic* / *Controller 1* / *Controller 2*, in the Controllers
+  window or the Input settings); the choice is remembered. A message shows
+  when a pad comes or goes.
 - Import `.dsk`/`.ddp` images into the FujiNet SD folder; load `.rom`/
   `.col`/`.bin` cartridges (boots in ColecoVision mode).
 - External FujiNet: a switch in the settings (Windows: `FujiNet ▸ Connection`)
   skips the built-in FujiNet and listens on an address:port you enter, e.g.
   `0.0.0.0:65216`; point the other instance's `[BOIP]` host and port at it.
 - The main window remembers its size.
-- Shared settings: palette, expansion module, joystick mode, aspect mode…
+- Shared settings: palette, aspect mode, gamepads, controls…
   are stored once (`~/.config/fujinet-go-adam/settings.ini`) and shared by
   every frontend — GNOME preferences, the Qt settings dialog and the macOS
   Settings window (⌘,) all read and write the same keys.
@@ -155,7 +164,7 @@ Useful environment switches: `ADAM_PACE_LOG=1` (per-second frame pacing
 diagnostics), `FUJINET_QUIET_BLOCKS=1` (suppress per-block disk log
 lines), `FUJINET_WEBUI_BIND=addr:port` (force the web UI to a fixed bind
 instead of the random free port picked each run), `ADAM_OPEN_DEBUGGER=1`,
-`ADAM_DEBUGGER_TAB=0..6` or a tab name (debugger start tab), `ADAM_OPEN_KEYPAD=1` (controllers window at launch); Windows: `ADAM_RENDERER=gdi` forces the GDI fallback, `ADAM_FPS=1` prints the renderer and frame rates.
+`ADAM_DEBUGGER_TAB=0..6` or a tab name (debugger start tab), `ADAM_OPEN_CONTROLLERS=1` (controllers window at launch; `ADAM_OPEN_KEYPAD=1` still works); Windows: `ADAM_RENDERER=gdi` forces the GDI fallback, `ADAM_FPS=1` prints the renderer and frame rates.
 
 The web admin normally binds a random free loopback port each run (the
 FujiNet Configuration window always points at whichever one was picked) so a

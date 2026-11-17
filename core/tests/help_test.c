@@ -25,7 +25,7 @@ static const char *const platform_names[] = { "GNOME", "KDE", "Windows", "macOS"
 
 /* What the frontends' Help buttons and menus open. */
 static const char *const contexts[] = {
-    "main", "keypad", "fujilog", "prefs/Machine", "prefs/Connection",
+    "main", "controllers", "fujilog", "prefs/Machine", "prefs/Input", "prefs/Connection",
     "debugger/console", "debugger/disassembly", "debugger/memory", "debugger/breakpoints",
     "debugger/watches", "debugger/cart", "debugger/trace", "debugger/history", "debugger/video",
     "debugger/sound", "debugger/symbols", "debugger/fujinet",
@@ -42,6 +42,8 @@ static const struct {
                        "Super Action speed roller, both ports (mouse)", "Speed roller, port 1 (mouse)",
                        "Speed roller, port 2 (mouse)", "Joystick mode", "Swap joystick buttons", "Reverse keypad",
                        "Use external FujiNet", "Listen address:port", "Aspect ratio", "Smooth scaling", NULL } },
+    { "preferences", { "Enable gamepads", "Gamepads", "Automatic", "Controller 1", "Controller 2",
+                       "Reset Controls", "Open Controllers", NULL } },
     { "preferences", { "No joystick", "Both ports", "Port 2 only", "Port 1 only", "Square pixels (256:212)",
                        "TV (4:3)", "Integer scale", NULL } },
 };
@@ -50,7 +52,8 @@ static const struct {
 static const char *const settings_keys[] = {
     "machine", "palette", "expansion", "joystick_mode", "swap_buttons", "reverse_keypad", "fujinet_external",
     "fujinet_external_addr", "aspect_mode", "smooth_scaling", "cart_path", "bindings", "window_width",
-    "window_height", "window_maximized",
+    "window_height", "window_maximized", "enable_gamepad", "pad_assign", "controllers_show_bindings",
+    "controllers_keyboard",
 };
 
 /* The app's shortcuts, as a PC and as a Mac shows them. */
@@ -175,6 +178,31 @@ check_controls(int p)
         require(p, "default-keys", "shortcut", platforms[p] == ADAMHELP_MACOS ? shortcuts[k].mac : shortcuts[k].pc);
 }
 
+/* The Controllers window, its Keyboard view and how the controls change. */
+static void
+check_controllers(int p)
+{
+    static const char *const window[] = { "Map", "Clear", "Defaults", "Show bindings", "Reset Computer",
+                                          "Reset Game", "Automatic", "Controller 1", "Controller 2",
+                                          "controllers_show_bindings", "ADAM_OPEN_CONTROLLERS" };
+    static const char *const keyboard[] = { "Keyboard", "SmartKeys", "MOVE/COPY", "STORE/GET", "WILD CARD",
+                                            "SHIFT", "CONTROL", "LOCK", "latch", "controllers_keyboard" };
+    static const char *const changing[] = { "Map", "Clear", "Defaults", "Show bindings", "F9", "F11", "F12",
+                                            "38 in all", "Done" };
+    static const char *const pads[] = { "pad_assign", "remembered", "Reset Controls", "Open Controllers" };
+
+    for (size_t k = 0; k < sizeof window / sizeof *window; k++)
+        require(p, "controllers-window", "control", window[k]);
+    for (size_t k = 0; k < sizeof keyboard / sizeof *keyboard; k++)
+        require(p, "keyboard-view", "keyboard", keyboard[k]);
+    for (size_t k = 0; k < sizeof changing / sizeof *changing; k++)
+        require(p, "changing-the-controls", "remap", changing[k]);
+    for (size_t k = 0; k < sizeof pads / sizeof *pads; k++)
+        require(p, "input-settings", "pads", pads[k]);
+    require(p, "gamepads", "pad", "South");
+    require(p, "gamepads", "pad", "East");
+}
+
 /* The two ports, in the FujiNet topic. */
 static void
 check_ports(int p)
@@ -248,6 +276,7 @@ main(void)
     for (int p = 0; p < 4; p++) {
         check_prefs(p);
         check_controls(p);
+        check_controllers(p);
         check_ports(p);
         check_debugger(p);
     }

@@ -10,7 +10,9 @@
       A Coleco ADAM (and ColecoVision) with FujiNet built in: mount disk
       and data-pack images from TNFS servers or the local SD folder,
       configure everything through the embedded FujiNet web UI, and play
-      with automatic gamepad support. For developers it includes a full
+      with gamepads that you can assign to either controller. A Controllers
+      window shows both hand controllers and the ADAM keyboard to click, and
+      remaps any control. For developers it includes a full
       debugger with breakpoints, stepping, instruction history, EOS/OS7
       symbols, and live VDP table viewers. Built-in, searchable Help covers
       all of it.
