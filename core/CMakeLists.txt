@@ -76,6 +76,9 @@ add_library(adamsession STATIC
   src/input.c
   src/bindings.c
   src/hid_keys.c
+  src/pad_assign.c
+  src/controls.c
+  src/keyboard.c
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c
@@ -166,6 +169,32 @@ target_link_libraries(help_test adamsession)
 add_executable(fujitrace_test tests/fujitrace_test.c)
 target_link_libraries(fujitrace_test adamsession)
 target_include_directories(fujitrace_test PRIVATE debugger)
+
+# ---- controllers port (from the coleco desktop) -------------------------------
+add_executable(controls_test tests/controls_test.c)
+target_link_libraries(controls_test adamsession)
+add_executable(gamepad_test tests/gamepad_test.c)
+target_link_libraries(gamepad_test adamsession)
+target_include_directories(gamepad_test PRIVATE src)
+add_executable(pad_assign_test tests/pad_assign_test.c)
+target_link_libraries(pad_assign_test adamsession)
+target_include_directories(pad_assign_test PRIVATE src)
+add_executable(gamepad_layer_test tests/gamepad_layer_test.c)
+target_link_libraries(gamepad_layer_test adamsession)
+target_include_directories(gamepad_layer_test PRIVATE src tests)
+add_executable(controllers_test tests/controllers_test.c)
+target_link_libraries(controllers_test adamsession)
+target_include_directories(controllers_test PRIVATE src tests)
+add_test(NAME controllers COMMAND controllers_test)
+add_executable(keyboard_test tests/keyboard_test.c)
+target_link_libraries(keyboard_test adamsession)
+target_include_directories(keyboard_test PRIVATE src tests)
+add_test(NAME keyboard COMMAND keyboard_test)
+add_test(NAME controls COMMAND controls_test)
+add_test(NAME gamepad COMMAND gamepad_test)
+add_test(NAME pad_assign COMMAND pad_assign_test)
+add_test(NAME gamepad_layer COMMAND gamepad_layer_test)
+set_tests_properties(gamepad_layer PROPERTIES SKIP_RETURN_CODE 77)
 
 add_test(NAME input COMMAND input_test)
 add_test(NAME bindings COMMAND bindings_test)

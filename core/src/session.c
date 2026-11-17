@@ -196,6 +196,7 @@ static void *emu_thread_main(void *arg)
         return NULL;
     }
     s->core = core;
+    input_resend(s);        /* a new core is idle: hand it whatever is held */
     adam_vidcap_core_set(core);
     if (s->debugger) {
         /* The FujiNet trace is always on: it is cheap, and it is most
@@ -265,6 +266,24 @@ static void *emu_thread_main(void *arg)
     return NULL;
 }
 
+/* The last gamepad hot-plug event, for a frontend's toast. */
+void session_gamepad_event(adamsession *s, const char *text)
+{
+    pthread_mutex_lock(&s->pad_event_mtx);
+    snprintf(s->pad_event, sizeof s->pad_event, "%s", text ? text : "");
+    pthread_mutex_unlock(&s->pad_event_mtx);
+}
+
+int adamsession_gamepad_last_event(adamsession *s, char *dst, int dstsz)
+{
+    int num;
+    if (!dst || dstsz <= 0) return 0;
+    pthread_mutex_lock(&s->pad_event_mtx);
+    num = snprintf(dst, (size_t)dstsz, "%s", s->pad_event);
+    pthread_mutex_unlock(&s->pad_event_mtx);
+    return num;
+}
+
 /****************************************************************************/
 /** Lifecycle                                                              **/
 /****************************************************************************/
@@ -286,7 +305,7 @@ adamsession *adamsession_new(const adamsession_paths *paths)
     adam_cond_init_monotonic(&s->vs_cv);
 
     settings_init(s);
-    input_init(s);
+    input_init(s);          /* the mutexes, and the bindings from the settings */
     return s;
 }
 
@@ -294,6 +313,8 @@ void adamsession_free(adamsession *s)
 {
     if (!s) return;
     adamsession_stop(s);
+    gamepad_stop(s);        /* a session that never started a machine may still have pads */
+    bindings_shutdown(s);
     adamdebug_destroy(s->debugger);
     s->debugger = NULL;
     adamsession_settings_flush(s);
@@ -303,6 +324,9 @@ void adamsession_free(adamsession *s)
     pthread_mutex_destroy(&s->cb_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
     pthread_cond_destroy(&s->vs_cv);
+    pthread_mutex_destroy(&s->input_mtx);
+    pthread_mutex_destroy(&s->sysact_mtx);
+    pthread_mutex_destroy(&s->pad_event_mtx);
     free(s);
 }
 
@@ -320,7 +344,7 @@ void adamsession_default_opts(adamsession *s, adamsession_start_opts *opts)
     opts->boip_listen = adamsession_get_str(s, "fujinet_external_addr", NULL);
     opts->enable_fujinet = 1;
     opts->enable_audio = 1;
-    opts->enable_gamepad = 1;
+    opts->enable_gamepad = adamsession_get_int(s, "enable_gamepad", 1);
 }
 
 int adamsession_parse_hostport(const char *text, char *host, int hostsz,

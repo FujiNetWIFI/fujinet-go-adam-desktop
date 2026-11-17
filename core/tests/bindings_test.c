@@ -63,11 +63,11 @@ int main(void)
     CHECK("unbound release not consumed", adamsession_input_key(s, 'a', 0, 0) == 0);
 
     /* sources do not cancel each other */
-    adamsession_press(s, UP, 1);
+    adamsession_pointer_set(s, 0, BIT(ADAM_ACT_UP));
     adamsession_input_key(s, ADAMSESSION_KEYSYM_KP_8, 1, 0);
     adamsession_input_key(s, ADAMSESSION_KEYSYM_KP_8, 0, 0);
     CHECK("window hold survives a key release", adamsession_buttons_held(s, 0) == BIT(ADAM_ACT_UP));
-    adamsession_press(s, UP, 0);
+    adamsession_pointer_set(s, 0, 0);
     CHECK("window release", adamsession_buttons_held(s, 0) == 0);
 
     /* keypad keys */
@@ -114,10 +114,10 @@ int main(void)
 
     /* release_all */
     adamsession_input_key(s, ADAMSESSION_KEYSYM_KP_4, 1, 0);
-    adamsession_press(s, ADAM_TARGET_PORT(0, 3), 1);
+    adamsession_pointer_set(s, 0, BIT(3));
     adamsession_release_all(s);
     CHECK("release_all drops the keyboard only", adamsession_buttons_held(s, 0) == BIT(3));
-    adamsession_press(s, ADAM_TARGET_PORT(0, 3), 0);
+    adamsession_pointer_set(s, 0, 0);
 
     /* names and key tables */
     adamsession_keysym_name('a', name, sizeof name);

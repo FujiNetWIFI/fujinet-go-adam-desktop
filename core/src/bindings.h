@@ -24,9 +24,11 @@ void bindings_init(adamsession *s);
 uint32_t bindings_keysym_of(int target);
 /* The gamepad button a target is bound to, ADAM_PAD_BTN_NONE for none. */
 int bindings_button_of(int target);
-/* Every target a keysym drives, written to out[] (room for
- * ADAM_TARGET_COUNT); returns the count. */
-int bindings_targets_for_key(uint32_t keysym, int *out);
+/* Lets go of the session before it is freed. */
+void bindings_shutdown(adamsession *s);
+/* Every target a keysym drives, written to out[] (room for `max`); returns
+ * the count. */
+int bindings_targets_for_key(uint32_t keysym, int *out, int max);
 /* Case fold used for every keysym comparison. */
 uint32_t bindings_fold(uint32_t keysym);
 

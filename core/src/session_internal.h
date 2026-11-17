@@ -25,24 +25,17 @@ typedef struct setting_kv {
     struct setting_kv *next;
 } setting_kv;
 
-/* One input source's hold on one controller port. The keyboard, the keypad
- * window and each gamepad are separate sources so a release on one cannot
- * cancel a press on another; input.c merges them into the controller word. */
-#define ADAM_SRC_PANEL    0
-#define ADAM_SRC_KEYBOARD 1
-#define ADAM_SRC_PAD      2 /* + pad slot */
-#define ADAM_MAX_PADS     4
-#define ADAM_SRC_COUNT    (ADAM_SRC_PAD + ADAM_MAX_PADS)
-#define ADAM_DIR_UP    1
-#define ADAM_DIR_DOWN  2
-#define ADAM_DIR_LEFT  4
-#define ADAM_DIR_RIGHT 8
-typedef struct {
-    uint8_t dirs;   /* ADAM_DIR_* */
-    uint8_t fires;  /* bit 0 Fire L, bit 1 Fire R */
-    uint16_t keys;  /* keypad keys held, bit per key */
-    int8_t klast;   /* the keypad key the word shows, -1 none */
-} adam_src_state;
+/* Who is holding an input down (the bits of pad_src): the keyboard, the
+ * window's mouse, and for each gamepad (by the stable owner number its slot
+ * was given, 0 to ADAM_MAX_PADS - 1) its buttons and its stick / hat
+ * separately. So letting go of one never releases another, even two pads or
+ * two buttons bound to the one key. */
+#define ADAM_PORTS    2
+#define ADAM_MAX_PADS 8
+#define SRC_KEYBOARD 1u
+#define SRC_PAD(owner)   (1u << (1 + (owner)))
+#define SRC_STICK(owner) (1u << (1 + ADAM_MAX_PADS + (owner)))
+#define SRC_POINTER  (1u << (1 + 2 * ADAM_MAX_PADS))
 
 struct adamsession {
     /* ---- resolved paths ---- */
@@ -109,11 +102,38 @@ struct adamsession {
     adamdebug *debugger;
     volatile int dbg_engaged; /* emulator loop runs the stepped path */
 
-    /* ---- controllers (input.c) ---- */
+    /* ---- controllers (input.c) ----
+     * What drives each controller action, one bit per source (SRC_*), so
+     * letting go of one source never releases another's. input_mtx covers
+     * these, held_keysym, host_word and the calls that hand the merged word
+     * to the machine; it is a leaf lock. */
     pthread_mutex_t input_mtx;
-    adam_src_state src[2][ADAM_SRC_COUNT]; /* per port, per input source */
-    uint32_t held_keysym[ADAM_TARGET_COUNT]; /* UI thread only */
-    uint32_t chord_keysym[10];               /* Ctrl+digit chords, UI thread */
+    uint32_t pad_src[ADAM_PORTS][ADAM_ACT_PER_PORT];
+    /* keys the keyboard holds, by target (the keysym it was pressed as), so a
+     * release clears exactly what its press asserted even if the binding
+     * changed meanwhile */
+    uint32_t held_keysym[ADAM_TARGET_COUNT];
+    uint32_t chord_keysym[10];          /* Ctrl+digit chords */
+    uint16_t host_word[ADAM_PORTS];     /* what was last pushed to the machine */
+
+    /* cross-thread system-action latch (adamsession_sysaction_post) */
+    pthread_mutex_t sysact_mtx;
+    unsigned sysact_pending;
+
+    /* the pad generation, carried across gamepad_stop/start so a restart of
+     * the session never replays an old toast */
+    unsigned pad_gen_base;
+    /* a pad thread has run before: its first scan finds the same pads again,
+     * which is no hot-plug (no toast, no generation change) */
+    int pad_restarted;
+    /* the last gamepad hot-plug event, for a frontend toast */
+    pthread_mutex_t pad_event_mtx;
+    char pad_event[128];
+
+    /* ---- keyboard skin (keyboard.c; input_mtx covers it) ---- */
+    uint8_t kbd_down[ADAM_KBD_CAPS_MAX];       /* the mouse is on the cap */
+    int64_t kbd_flash_ns[ADAM_KBD_CAPS_MAX];   /* CLOCK_MONOTONIC of the last press */
+    uint8_t kbd_latch[4];                      /* by ADAM_MOD_*: 1 = latched */
 
     char last_error[512];
 };
@@ -136,21 +156,32 @@ int  copy_file(const char *src, const char *dst);
 int  audio_start(adamsession *s);
 void audio_stop(adamsession *s);
 
+/* bindings.c */
+void bindings_init(adamsession *s);
+void bindings_shutdown(adamsession *s);
+
 /* input.c */
 void input_init(adamsession *s);
+/* Let go of every source and tell the machine (a stop). */
 void input_release_everything(adamsession *s);
-/* Hold or release one per-port target (target < ADAM_TARGET_SYSACT(0)) for a
- * source. */
-void input_apply(adamsession *s, int src, int target, int down);
-/* Replace a gamepad slot's whole hold: the port it drives and its state
- * (the other port is cleared, so reassigning a pad cannot strand a hold). */
-void input_pad_set(adamsession *s, int slot, int port, int dirs, int fires,
-                   uint16_t keys);
-void input_pad_clear(adamsession *s, int slot);
+/* Hand the machine whatever is held (a new core is idle). */
+void input_resend(adamsession *s);
+
+/* keyboard.c: what pressing cap `index` sends (and its latch effects), or -1
+ * when it sends nothing (a modifier, a release, a bad index). The public
+ * adamsession_keyboard_press sends the result through adamsession_key. */
+int  keyboard_press_code(adamsession *s, int index, int down);
 
 /* gamepad_sdl.c */
 int  gamepad_start(adamsession *s);
 void gamepad_stop(adamsession *s);
+/* Called by the gamepad thread for the pad that owns `owner`. press: a pad
+ * button drives a controller target (the pad's SRC_PAD source). stick: an
+ * analog stick or hat drives a direction (its SRC_STICK source). */
+void session_gamepad_press(adamsession *s, int owner, int target, int down);
+void session_gamepad_stick(adamsession *s, int owner, int port, int act, int down);
+/* Called by the gamepad thread on a connect/disconnect. */
+void session_gamepad_event(adamsession *s, const char *text);
 
 /* fujinet_runtime.c */
 int  fujinet_start(adamsession *s);

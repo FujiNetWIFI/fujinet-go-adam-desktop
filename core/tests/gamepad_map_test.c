@@ -135,6 +135,7 @@ int main(void)
     usleep(150 * 1000);
     wait_for(s, 0x7F7F, "west unbound");
     SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_WEST, false);
+    usleep(150 * 1000);   /* the backend sees the release before the next press */
 
     /* Rebind West to keypad 5: the word carries the key. */
     adamsession_binding_set_button(s, ADAM_TARGET_PORT(0, 5), ADAM_PAD_BTN_WEST,

@@ -67,11 +67,16 @@ static void compute_defaults_locked(void)
     seed_key(ADAM_TARGET_PORT(0, ADAM_KEYPAD_KEYS - 2), ADAMSESSION_KEYSYM_KP_MULTIPLY);
     seed_key(ADAM_TARGET_PORT(0, ADAM_KEYPAD_KEYS - 1), ADAMSESSION_KEYSYM_KP_DIVIDE);
 
-    /* gamepads: South is the left fire button, East the right; the stick and
-     * D-pad always steer (gamepad_sdl.c), so directions are not bound. */
+    /* gamepads: South is the left fire button, East the right, the D-pad
+     * steers (the left analog stick always does: gamepad_sdl.c). Like every
+     * button the D-pad's are ordinary bindings, so they can be moved. */
     {
         int port;
-        for (port = 0; port < 2; port++) {
+        for (port = 0; port < ADAM_PORTS; port++) {
+            s_defaults[ADAM_TARGET_PORT(port, ADAM_ACT_UP)].button = ADAM_PAD_BTN_DPAD_UP;
+            s_defaults[ADAM_TARGET_PORT(port, ADAM_ACT_DOWN)].button = ADAM_PAD_BTN_DPAD_DOWN;
+            s_defaults[ADAM_TARGET_PORT(port, ADAM_ACT_LEFT)].button = ADAM_PAD_BTN_DPAD_LEFT;
+            s_defaults[ADAM_TARGET_PORT(port, ADAM_ACT_RIGHT)].button = ADAM_PAD_BTN_DPAD_RIGHT;
             s_defaults[ADAM_TARGET_PORT(port, ADAM_ACT_FIRE_L)].button = ADAM_PAD_BTN_SOUTH;
             s_defaults[ADAM_TARGET_PORT(port, ADAM_ACT_FIRE_R)].button = ADAM_PAD_BTN_EAST;
         }
@@ -147,6 +152,13 @@ void bindings_init(adamsession *s)
     pthread_mutex_unlock(&s_lock);
 }
 
+void bindings_shutdown(adamsession *s)
+{
+    pthread_mutex_lock(&s_lock);
+    if (s_store == s) s_store = NULL;
+    pthread_mutex_unlock(&s_lock);
+}
+
 /* ---- lookups -------------------------------------------------------------- */
 
 uint32_t bindings_keysym_of(int target)
@@ -171,14 +183,14 @@ int bindings_button_of(int target)
     return b;
 }
 
-int bindings_targets_for_key(uint32_t keysym, int *out)
+int bindings_targets_for_key(uint32_t keysym, int *out, int max)
 {
     int t, n = 0;
     keysym = bindings_fold(keysym);
     if (!keysym) return 0;
     pthread_mutex_lock(&s_lock);
     ensure_seeded_locked();
-    for (t = 0; t < ADAM_TARGET_COUNT; t++)
+    for (t = 0; t < ADAM_TARGET_COUNT && n < max; t++)
         if (s_table[t].keysym == keysym) out[n++] = t;
     pthread_mutex_unlock(&s_lock);
     return n;
@@ -188,7 +200,7 @@ int adamsession_target_for_key(adamsession *s, uint32_t keysym)
 {
     int t[ADAM_TARGET_COUNT];
     (void)s;
-    return bindings_targets_for_key(keysym, t) ? t[0] : -1;
+    return bindings_targets_for_key(keysym, t, ADAM_TARGET_COUNT) ? t[0] : -1;
 }
 
 /* A pad button is scoped to the pad's port: the same button may mean
@@ -201,6 +213,7 @@ int adamsession_target_for_button(adamsession *s, int port, int button)
     if (button == ADAM_PAD_BTN_NONE) return -1;
     pthread_mutex_lock(&s_lock);
     ensure_seeded_locked();
+    if (port < 0 || port >= ADAM_PORTS) port = 0;
     for (t = 0; t < ADAM_ACT_PER_PORT; t++)
         if (s_table[ADAM_TARGET_PORT(port, t)].button == button) {
             found = ADAM_TARGET_PORT(port, t);
@@ -241,6 +254,7 @@ void adamsession_binding_set_key(adamsession *s, int target, uint32_t keysym,
 {
     int victims[ADAM_TARGET_COUNT], nvictims = 0, t;
     (void)s;
+    if (stolen && stolensz > 0) stolen[0] = '\0';
     if (target < 0 || target >= ADAM_TARGET_COUNT) return;
     keysym = bindings_fold(keysym);
     pthread_mutex_lock(&s_lock);
@@ -264,6 +278,7 @@ void adamsession_binding_set_button(adamsession *s, int target, int button,
     int victims[ADAM_TARGET_COUNT], nvictims = 0, t;
     int port = target / ADAM_ACT_PER_PORT; /* 2 = system actions */
     (void)s;
+    if (stolen && stolensz > 0) stolen[0] = '\0';
     if (target < 0 || target >= ADAM_TARGET_COUNT) return;
     pthread_mutex_lock(&s_lock);
     ensure_seeded_locked();
@@ -341,7 +356,21 @@ static const char *const pad_button_names[ADAM_PAD_BTN_COUNT] = {
 
 const char *adam_pad_button_name(int button)
 {
-    if (button >= 0 && button < ADAM_PAD_BTN_COUNT) return pad_button_names[button];
+    static char buf[32];
+    if (ADAM_PAD_BTN_IS_NAMED(button)) return pad_button_names[button];
+    if (ADAM_PAD_BTN_IS_RAW(button)) {
+        snprintf(buf, sizeof buf, "Button %d", button - ADAM_PAD_BTN_RAW_BASE);
+        return buf;
+    }
+    if (ADAM_PAD_BTN_IS_HAT(button)) {
+        static const char *const dirs[ADAM_PAD_HAT_DIRS] =
+            { "Up", "Up-Right", "Right", "Down-Right", "Down", "Down-Left",
+              "Left", "Up-Left" };
+        int hat = (button - ADAM_PAD_HAT_BASE) / ADAM_PAD_HAT_DIRS;
+        int dir = (button - ADAM_PAD_HAT_BASE) % ADAM_PAD_HAT_DIRS;
+        snprintf(buf, sizeof buf, "Hat %d %s", hat, dirs[dir]);
+        return buf;
+    }
     return "";
 }
 

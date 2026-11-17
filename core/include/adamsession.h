@@ -163,6 +163,7 @@ int adam_key_from_event(uint32_t keysym, uint32_t unicode, int ctrl_down);
  * keypad, the stick and the two fire buttons, then the system actions. The
  * keyboard, the on-screen keypad window and each gamepad hold their own
  * state per port and the session merges them into the controller word. */
+#define ADAM_PORTS       2    /* hand controllers: "Controller 1" and "2" */
 #define ADAM_KEYPAD_KEYS 12
 typedef enum {
     ADAM_ACT_KEYPAD = 0,       /* + 0..9 = '0'..'9', + 10 = '*', + 11 = '#' */
@@ -181,6 +182,18 @@ typedef enum {
 #define ADAM_TARGET_SYSACT(sa)      (2 * ADAM_ACT_PER_PORT + (sa))
 #define ADAM_TARGET_COUNT           (2 * ADAM_ACT_PER_PORT + ADAM_SYSACT_COUNT)
 
+/* The Controllers window's mouse hold on `port`: `mask` is a bit per
+ * adam_action (its own source; 0 lets go of that port). */
+void adamsession_pointer_set(adamsession *s, int port, unsigned mask);
+/* The word last handed to the machine for `port` (idle 0x7F7F); for tests
+ * and status. */
+uint16_t adamsession_controller_word(adamsession *s, int port);
+/* Cross-thread: the gamepad thread cannot call into a UI toolkit, so a
+ * system action it resolves is posted and a frontend's timer takes it. Posts
+ * of one action coalesce; take returns the lowest pending one. */
+void adamsession_sysaction_post(adamsession *s, int sysact);
+int  adamsession_sysaction_take(adamsession *s, int *sysact);
+
 /* Apply one control from the on-screen keypad window. `down` is press or
  * release; the control stays held until released. A system target acts on
  * press. */
@@ -189,9 +202,98 @@ void adamsession_sysaction(adamsession *s, int sysact);
 /* Release everything the keyboard holds (focus loss). */
 void adamsession_release_all(adamsession *s);
 /* What the machine sees held on a port right now (keyboard, gamepads and the
- * keypad window together), one bit per adam_action. For the keypad
- * window's highlights. */
+ * Controllers window together), one bit per adam_action: opposed directions
+ * cancel and only the lowest held keypad key counts, because the machine
+ * reads one. For the window's highlights. */
 uint32_t adamsession_buttons_held(adamsession *s, int port);
+
+/* ---- the Controllers window's layout ---------------------------------------
+ * One layout for every toolkit: two ADAM hand controllers side by side, each
+ * with a stick (a disc ringed by eight direction wedges), a fire button on
+ * either side and the 12-key keypad below. Units: a keypad key's width is
+ * 1.0. Geometry only -- colours are the frontends'. Wedges are annular
+ * sectors, so their rectangles are bounding boxes: paint one as the sector of
+ * the STICK disc whose direction is its act_mask, between half the disc's
+ * radius and all of it, and hit-test with adamsession_controls_hit (exact
+ * shapes). */
+typedef enum {
+    ADAM_CTL_KEY = 0,      /* a keypad key (0-9 * #) */
+    ADAM_CTL_FIRE,         /* a side fire button */
+    ADAM_CTL_STICK,        /* the stick's disc: drag to tilt */
+    ADAM_CTL_DIRECTION,    /* one of the eight wedges round the stick */
+    ADAM_CTL_OVERLAY,      /* the keypad's overlay-card frame (drawn, never pressed) */
+    ADAM_CTL_CAPTION       /* text: "Controller 1" */
+} adam_control_kind;
+
+typedef struct {
+    int kind;                /* adam_control_kind */
+    const char *label;       /* "5", "*", "Left Fire", "Controller 1" */
+    const char *legend;      /* NULL */
+    int port;                /* 0 controller 1, 1 controller 2 */
+    int target;              /* ADAM_TARGET_*, or -1 (stick, diagonals, overlay, caption) */
+    unsigned act_mask;       /* the adam_action bits it drives */
+    float xpos, ypos, width, height;   /* layout units, from the top-left */
+} adam_control;
+
+/* The layout; *count is its entry count and width/height (units) its extent,
+ * so a toolkit can size its drawing area. Entries are in paint order. */
+const adam_control *adamsession_controls_layout(int *count, float *width,
+                                                float *height);
+/* The topmost pressable control under a point (layout units), or -1. */
+int adamsession_controls_hit(float xpos, float ypos);
+/* The stick's direction bits (adam_action UP/DOWN/LEFT/RIGHT) for a pointer
+ * at (delx, dely) from the disc's centre (+x right, +y toward the player, any
+ * unit) with `radius` the disc's reach: nothing inside a quarter of it, else
+ * one of eight 45-degree sectors. */
+unsigned adamsession_stick_from_vector(float delx, float dely, float radius);
+/* The keycap of keypad action `act` (0..11): "0".."9", "*", "#"; else NULL. */
+const char *adamsession_keypad_label(int act);
+
+/* ---- the on-screen keyboard -------------------------------------------------
+ * The ADAM's own keyboard as printed (SmartKeys I-VI, the editing block, the
+ * arrow diamond), in key units: 1.0 = a key, pitch 1.1, from the top-left.
+ * Pressing a cap sends the same byte the host key would (adamsession_key);
+ * nothing is stored and Map does not apply. The ADAM keyboard reports a key
+ * once, on the press (there is no key-up), so a cap fires on press and is
+ * "held" only for a short flash that adamsession_keyboard_held reports.
+ * SHIFT and CONTROL are latching modifiers: they light until the next ordinary
+ * key goes out, which they change (SHIFT -> the shifted legend's code,
+ * CONTROL -> the control code); LOCK latches until pressed again. */
+#define ADAM_KBD_CAPS_MAX 96
+typedef enum {
+    ADAM_KEYCAP_NORMAL = 0,   /* a character key */
+    ADAM_KEYCAP_SPECIAL,      /* a named key: RETURN, TAB, BACKSPACE, HOME, ... */
+    ADAM_KEYCAP_SMARTKEY,     /* I..VI along the top */
+    ADAM_KEYCAP_EDIT,         /* WILDCARD, UNDO, MOVE/COPY, STORE/GET, INSERT, DELETE, PRINT, CLEAR */
+    ADAM_KEYCAP_MODIFIER,     /* SHIFT, CONTROL: latches until the next key */
+    ADAM_KEYCAP_LOCK,         /* LOCK: toggles */
+    ADAM_KEYCAP_ARROW,        /* the cursor diamond */
+    ADAM_KEYCAP_SPACE         /* the space bar */
+} adam_keycap_kind;
+
+/* A MODIFIER or LOCK cap carries one of these in `code` (both SHIFT caps are
+ * one latch). */
+enum { ADAM_MOD_NONE = 0, ADAM_MOD_SHIFT = 1, ADAM_MOD_CONTROL = 2, ADAM_MOD_LOCK = 3 };
+
+typedef struct {
+    const char *label;        /* "A", "1", "RETURN", "WILD CARD", a UTF-8 arrow for ARROW */
+    const char *shifted;      /* the legend printed above ("!" on 1), or NULL */
+    unsigned code;            /* the byte sent unshifted; an ADAM_MOD_* for a MODIFIER / LOCK */
+    unsigned shift_code;      /* the byte sent with SHIFT latched (== code if none) */
+    float left, top, wide, high;
+    int kind;                 /* adam_keycap_kind */
+} adam_keycap;
+
+const adam_keycap *adamsession_keyboard_layout(int *count, float *wide, float *high);
+/* Press (down 1) or release (down 0) cap `index`. An ordinary cap sends its
+ * byte on the press and ignores the release; a MODIFIER or LOCK cap toggles
+ * on each press. UI thread. */
+void adamsession_keyboard_press(adamsession *s, int index, int down);
+/* Bit 0: the cap was just pressed (a flash; clears by itself ~120 ms later).
+ * Bit 1: the cap is a latched modifier or lock. */
+int  adamsession_keyboard_held(adamsession *s, int index);
+/* Let go of every latch and flash (window hidden). */
+void adamsession_keyboard_release(adamsession *s);
 
 /* ---- keyboard translation ------------------------------------------------
  * keysym is an X11/xkb keysym (== a GDK keyval; Qt, Win32 and AppKit map
@@ -247,9 +349,10 @@ int adamsession_keysym_name(uint32_t keysym, char *dst, int dstsz);
  * NONE is "clear". Persisted in the settings store under "bindings" as only
  * the entries that differ from the defaults. Defaults: the port 1 stick on
  * the numeric keypad's 8/4/6/2, Fire L = Keypad 0, Fire R = Keypad Enter,
- * '*' and '#' on Keypad * and /; gamepad: South = Fire L, East = Fire R
- * (the stick and D-pad always steer). Everything else goes to the ADAM's
- * keyboard. */
+ * '*' and '#' on Keypad * and /; gamepad, both controllers: the D-pad
+ * steers, South = Fire L, East = Fire R (the left stick always steers).
+ * Everything else goes to the ADAM's keyboard. A gamepad button is unique
+ * within its controller (and the system actions). */
 typedef enum {
     ADAM_PAD_BTN_NONE = -1,
     ADAM_PAD_BTN_SOUTH = 0, ADAM_PAD_BTN_EAST, ADAM_PAD_BTN_WEST,
@@ -259,8 +362,16 @@ typedef enum {
     ADAM_PAD_BTN_DPAD_UP, ADAM_PAD_BTN_DPAD_DOWN, ADAM_PAD_BTN_DPAD_LEFT,
     ADAM_PAD_BTN_DPAD_RIGHT,
     ADAM_PAD_BTN_LEFT_TRIGGER, ADAM_PAD_BTN_RIGHT_TRIGGER,
-    ADAM_PAD_BTN_COUNT
+    ADAM_PAD_BTN_COUNT,
+    /* Raw joystick bands for devices SDL has no gamepad mapping for (a plain
+     * HID adapter): button index, and hat directions (hat*8 + dir). */
+    ADAM_PAD_BTN_RAW_BASE = 64, ADAM_PAD_BTN_RAW_LAST = 127,
+    ADAM_PAD_HAT_BASE = 192, ADAM_PAD_HAT_LAST = 255
 } adam_pad_button;
+#define ADAM_PAD_HAT_DIRS 8
+#define ADAM_PAD_BTN_IS_NAMED(btn) ((btn) >= 0 && (btn) < ADAM_PAD_BTN_COUNT)
+#define ADAM_PAD_BTN_IS_RAW(btn)   ((btn) >= ADAM_PAD_BTN_RAW_BASE && (btn) <= ADAM_PAD_BTN_RAW_LAST)
+#define ADAM_PAD_BTN_IS_HAT(btn)   ((btn) >= ADAM_PAD_HAT_BASE && (btn) <= ADAM_PAD_HAT_LAST)
 
 typedef struct {
     uint32_t keysym;     /* 0 = no key */
@@ -288,15 +399,33 @@ void adamsession_gamepad_capture_begin(adamsession *s);
 void adamsession_gamepad_capture_cancel(adamsession *s);
 int  adamsession_gamepad_capture_poll(adamsession *s, int *button);
 
-/* ---- gamepads (SDL, hotplug; started by adamsession_start) --------------- */
+/* ---- gamepads (SDL, hotplugged; started by adamsession_start) ---------------
+ * USB pads, mapped or not (a plain HID adapter is opened as a raw joystick),
+ * drive the hand controllers: the first pad connected drives Controller 1, the
+ * second Controller 2, unless a pad is assigned explicitly. An explicit
+ * assignment is remembered (setting "pad_assign": a pad's GUID, else its name)
+ * and applies again when the pad is replugged or the app restarted. Every
+ * button goes through the bindings (adamsession_target_for_button); the left
+ * stick, a raw joystick's first hat and the D-pad's buttons steer; the two
+ * triggers are bindable buttons. Pad `idx` below is its slot in the
+ * connection order, 0 .. count - 1. */
 int  adamsession_gamepad_count(adamsession *s);
 /* Name of connected pad idx into dst; returns length or 0. */
 int  adamsession_gamepad_name(adamsession *s, int idx, char *dst, int dstsz);
-/* Bind pad idx to controller port 0/1; -1 restores automatic assignment
- * (first pad -> port 0, second -> port 1). */
+/* port: 0 or 1 for that controller, -1 for automatic. Remembered. */
 void adamsession_gamepad_assign(adamsession *s, int idx, int port);
-/* The controller word the gamepad backend last pushed to a port (idle
- * 0x7F7F when nothing was pushed yet). For status displays and tests. */
+/* The explicit port (0, 1), or -1 for automatic. */
+int  adamsession_gamepad_assignment(adamsession *s, int idx);
+/* The controller the pad drives right now (0, 1), or -1 for none. */
+int  adamsession_gamepad_effective_port(adamsession *s, int idx);
+/* Bumped on every pad added or removed (and carried across a restart of the
+ * session), so a frontend can refresh its lists and toasts cheaply. */
+unsigned adamsession_gamepad_generation(adamsession *s);
+/* The last hot-plug event as text ("Connected: 8BitDo SN30 Pro (controller 1)",
+ * "Disconnected: ..."), for a toast; returns the length, 0 if none yet. */
+int  adamsession_gamepad_last_event(adamsession *s, char *dst, int dstsz);
+/* The controller word last handed to a port (idle 0x7F7F when nothing is
+ * held). For status displays and tests. */
 uint16_t adamsession_gamepad_last_state(adamsession *s, int port);
 
 /* ---- audio ---------------------------------------------------------------
