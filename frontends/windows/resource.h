@@ -15,8 +15,9 @@
 #define IDM_DEBUGGER       209
 #define IDM_ABOUT          210
 #define IDM_EXIT           211
-#define IDM_KEYPAD         212
+#define IDM_CONTROLLERS    212
 #define IDM_FUJINET_CONN   213
 #define IDM_HELP           214
+#define IDM_INPUT_SETTINGS 215
 
 #endif

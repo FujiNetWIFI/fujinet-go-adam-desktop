@@ -19,7 +19,8 @@ add_executable(fujinet-go-adam-windows WIN32
   main.c
   display.c
   keys.c
-  keypad/keypad_window.c
+  prefs.c
+  controllers/controllers_window.c
   debugger/dbg_window.c
   debugger/dbg_video.c
   help/help_window.c
@@ -29,7 +30,7 @@ target_link_libraries(fujinet-go-adam-windows PRIVATE
   adamsession
   # d3d11: the picture (display.c; d3dcompiler_47 and avrt are loaded, not
   # linked). dwmapi: DwmFlush, the GDI fallback's frame clock. uxtheme: the
-  # keypad's themed buttons.
+  # themed buttons.
   d3d11 gdi32 user32 comdlg32 dwmapi shell32 comctl32 uxtheme
 )
 # The debugger window talks to the shared engine (core/include/adamdebug.h),

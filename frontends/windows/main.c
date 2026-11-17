@@ -6,7 +6,8 @@
  * the chosen aspect, whose render thread feeds the session's vsync
  * phase-lock (the Windows analog of the GTK frame clock / CVDisplayLink),
  * full keyboard mapping through the remappable controller bindings (keys.c),
- * a menu bar, media import, the Controllers window (F9), and the FujiNet
+ * a menu bar, media import, the Controllers window (F9) with the ADAM keyboard,
+ * the Input settings, and the FujiNet
  * configuration (default browser) and console-log windows. Gamepads are
  * handled inside the core's SDL thread. No on-screen input panels appear
  * unless the user asks.
@@ -25,12 +26,17 @@
 #include <string.h>
 
 #include "adamsession.h"
+#include "controllers/controllers_window.h"
 #include "debugger/dbg_window.h"
 #include "display.h"
 #include "help/help_window.h"
-#include "keypad/keypad_window.h"
 #include "keys.h"
+#include "prefs.h"
 #include "resource.h"
+
+#define APP_TITLE "FujiNet Go Adam"
+#define NOTICE_MS 4000
+#define IDT_MAIN  10    /* 50 ms: system actions from the pads, hot-plug notices */
 
 static adamsession *g_session;
 static HWND g_hwnd;
@@ -38,6 +44,9 @@ static HWND g_display;
 static HMENU g_menu;
 static HWND g_log_window;
 static HWND g_log_edit;
+
+static unsigned g_pad_generation;       /* the last gamepad generation shown */
+static DWORD g_notice_until;            /* tick the title notice ends, 0 = none */
 
 static int g_aspect_mode;
 static int g_smooth;
@@ -60,7 +69,8 @@ static void layout_display(void)
 
 static void toggle_fullscreen(HWND hwnd);
 static void open_debugger(void);
-static void open_keypad(void);
+static void open_controllers(void);
+static void show_input_settings(void);
 
 /* F9 / F11 / F12 are the app's own and never reach the controller bindings
  * (Map mode refuses them); F10 stays with the system menu. */
@@ -73,7 +83,7 @@ static int on_key(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case VK_F10:
         return 0; /* let the system open the menu */
     case VK_F9:
-        if (press) open_keypad();
+        if (press) open_controllers();
         return 1;
     case VK_F11:
         if (press) toggle_fullscreen(hwnd);
@@ -82,6 +92,9 @@ static int on_key(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (press) open_debugger();
         return 1;
     default:
+        /* Map mode, when armed, takes the key before the machine does */
+        if (adam_controllers_map_key(msg, wp, lp))
+            return 1;
         return adam_win_key_msg(g_session, msg, wp, lp);
     }
 }
@@ -91,11 +104,52 @@ static int on_key(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 static void restart_session(void)
 {
     adamsession_start_opts opts;
+    adamsession_settings_flush(g_session);
     adamsession_stop(g_session);
     adamsession_default_opts(g_session, &opts);
     if (adamsession_start(g_session, &opts) != 0)
         MessageBoxA(g_hwnd, adamsession_last_error(g_session),
                     "FujiNet Go Adam", MB_ICONWARNING);
+}
+
+/* A short notice in the title bar (there is no status bar): a gamepad
+ * hot-plug, a reset. */
+static void notice(const char *text)
+{
+    char title[400];
+    snprintf(title, sizeof title, APP_TITLE " - %s", text);
+    adam_set_text_utf8(g_hwnd, title);
+    g_notice_until = GetTickCount() + NOTICE_MS;
+    if (!g_notice_until) g_notice_until = 1;
+}
+
+static void notice_tick(void)
+{
+    if (!g_notice_until || (LONG)(GetTickCount() - g_notice_until) < 0) return;
+    g_notice_until = 0;
+    SetWindowTextA(g_hwnd, APP_TITLE);
+}
+
+/* Run a system action (the menu, a gamepad button or a bound key): the UI
+ * thread only. */
+static void run_sysaction(int sysact)
+{
+    adamsession_sysaction(g_session, sysact);
+    notice(sysact == ADAM_SYSACT_RESET_COMPUTER ? "Computer reset" : "Game reset");
+}
+
+/* Gamepad hot-plug: the session bumps a generation on every add/remove and
+ * keeps the last event as text; show it for a few seconds. */
+static void poll_gamepads(void)
+{
+    const unsigned gen = adamsession_gamepad_generation(g_session);
+    char text[160];
+    if (gen == g_pad_generation) return;
+    g_pad_generation = gen;
+    if (adamsession_gamepad_last_event(g_session, text, sizeof text) > 0)
+        notice(text);
+    adam_controllers_window_refresh();
+    adam_prefs_gamepads_changed();
 }
 
 static int open_file(HWND hwnd, const char *filter, char *out, int outsz)
@@ -462,9 +516,23 @@ static void open_debugger(void)
     adam_debugger_toggle(g_hwnd, g_session);
 }
 
-static void open_keypad(void)
+static void open_controllers(void)
 {
-    adam_keypad_window_toggle(g_hwnd, g_session);
+    adam_controllers_window_toggle(g_hwnd, g_session);
+}
+
+/* The settings that need the machine restarted wait for the window to close. */
+static void prefs_closed(int dirty)
+{
+    if (!dirty) return;
+    restart_session();
+    adam_controllers_window_refresh();
+}
+
+static void show_input_settings(void)
+{
+    static const adam_prefs_hooks hooks = { prefs_closed };
+    adam_prefs_show(g_hwnd, g_session, &hooks);
 }
 
 /* ---- fullscreen ---------------------------------------------------------- */
@@ -527,7 +595,8 @@ static HMENU build_menu(void)
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)fujinet, "&FujiNet");
 
     AppendMenuA(view, MF_STRING, IDM_FULLSCREEN, "Fullscreen\tF11");
-    AppendMenuA(view, MF_STRING, IDM_KEYPAD, "Controllers\tF9");
+    AppendMenuA(view, MF_STRING, IDM_CONTROLLERS, "Controllers\tF9");
+    AppendMenuA(view, MF_STRING, IDM_INPUT_SETTINGS, "Input Settings...");
     AppendMenuA(view, MF_STRING, IDM_DEBUGGER, "Debugger\tF12");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)view, "&View");
 
@@ -589,10 +658,19 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KILLFOCUS:
         adamsession_release_all(g_session);
         break;
+    case WM_TIMER:
+        if (wp == IDT_MAIN) {
+            int sysact;
+            while (adamsession_sysaction_take(g_session, &sysact))
+                run_sysaction(sysact);
+            poll_gamepads();
+            notice_tick();
+        }
+        return 0;
     case WM_COMMAND:
         switch (LOWORD(wp)) {
-        case IDM_RESET_ADAM: adamsession_reset(g_session, 0); break;
-        case IDM_RESET_CV:   adamsession_reset(g_session, 1); break;
+        case IDM_RESET_ADAM: run_sysaction(ADAM_SYSACT_RESET_COMPUTER); break;
+        case IDM_RESET_CV:   run_sysaction(ADAM_SYSACT_RESET_GAME); break;
         case IDM_IMPORT_MEDIA: import_media(hwnd); break;
         case IDM_LOAD_CART:  load_cart(hwnd); break;
         case IDM_EJECT_CART: eject_cart(); break;
@@ -606,7 +684,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                                                          GWLP_HINSTANCE));
             break;
         case IDM_FULLSCREEN: toggle_fullscreen(hwnd); break;
-        case IDM_KEYPAD:     open_keypad(); break;
+        case IDM_CONTROLLERS: open_controllers(); break;
+        case IDM_INPUT_SETTINGS: show_input_settings(); break;
         case IDM_DEBUGGER:   open_debugger(); break;
         case IDM_HELP: adam_help_for(hwnd); break;
         case IDM_ABOUT: {
@@ -638,6 +717,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         save_window_size(hwnd);
         break;
     case WM_DESTROY:
+        adam_prefs_abandon();
+        KillTimer(hwnd, IDT_MAIN);
         PostQuitMessage(0);
         return 0;
     }
@@ -706,14 +787,20 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     /* Developer affordances, matching the other frontends. */
     /* F1 is the ADAM's SmartKey I in the window itself */
     adam_help_set_context(g_hwnd, "main", 0);
-    if (getenv("ADAM_OPEN_KEYPAD"))
-        open_keypad();
+    g_pad_generation = adamsession_gamepad_generation(g_session);
+    SetTimer(g_hwnd, IDT_MAIN, 50, NULL);
+    if (getenv("ADAM_OPEN_CONTROLLERS") || getenv("ADAM_OPEN_KEYPAD"))
+        open_controllers();
+    if (getenv("ADAM_OPEN_INPUT_SETTINGS"))
+        show_input_settings();
     if (getenv("ADAM_OPEN_DEBUGGER"))
         adam_debugger_show(g_hwnd, g_session);
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
         /* The debugger's F5/F7/F8/F9/F12 accelerators get first refusal
          * while its window (or one of its fields) has the focus. */
+        if (adam_prefs_pretranslate(&msg))      /* first: it is a dialog's keys */
+            continue;
         if (adam_debugger_pretranslate(&msg))
             continue;
         if (adam_help_pretranslate(&msg))
