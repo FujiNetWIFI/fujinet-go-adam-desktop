@@ -45,6 +45,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.15.0" date="2026-11-16">
+      <description>
+        <p>
+          macOS: the picture is drawn with Metal in step with the display, so it is smoother on 60 and 120 Hz screens; the emulator runs with game-grade scheduling priority; and the app opts into macOS Game Mode when it is full screen.
+        </p>
+        <p>
+          Requires macOS 13.3 or later.
+        </p>
+      </description>
+    </release>
     <release version="0.14.0" date="2026-11-16">
       <description>
         <p>
