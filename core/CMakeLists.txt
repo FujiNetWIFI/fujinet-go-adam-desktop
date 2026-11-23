@@ -163,6 +163,10 @@ add_executable(vdp_decode_test tests/vdp_decode_test.c)
 target_link_libraries(vdp_decode_test adamsession)
 
 # The built-in Help covers every setting, key and context.
+add_executable(provision_test tests/provision_test.c)
+target_link_libraries(provision_test adamsession)
+target_include_directories(provision_test PRIVATE src)
+
 add_executable(help_test tests/help_test.c)
 target_link_libraries(help_test adamsession)
 
@@ -185,6 +189,7 @@ target_include_directories(gamepad_layer_test PRIVATE src tests)
 add_executable(controllers_test tests/controllers_test.c)
 target_link_libraries(controllers_test adamsession)
 target_include_directories(controllers_test PRIVATE src tests)
+add_test(NAME provision COMMAND provision_test)
 add_test(NAME controllers COMMAND controllers_test)
 add_executable(keyboard_test tests/keyboard_test.c)
 target_link_libraries(keyboard_test adamsession)

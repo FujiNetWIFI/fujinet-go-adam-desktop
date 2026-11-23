@@ -47,6 +47,13 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.17.1" date="2026-11-23">
+      <description>
+        <p>
+          Fixed CONFIG missing newer features, such as the lobby key, on existing installs: the bundled FujiNet files are now refreshed on every start. Your settings and SD folder are left alone.
+        </p>
+      </description>
+    </release>
     <release version="0.17.0" date="2026-11-23">
       <description>
         <p>

@@ -139,7 +139,9 @@ int copy_file(const char *src, const char *dst)
     return rc;
 }
 
-static int copy_tree(const char *src, const char *dst)
+/* skip_fnconfig: leave any file named fnconfig.ini out of the copy, so a
+ * refresh never clobbers the user's settings. */
+static int copy_tree(const char *src, const char *dst, int skip_fnconfig)
 {
     DIR *d;
     struct dirent *e;
@@ -152,11 +154,12 @@ static int copy_tree(const char *src, const char *dst)
         char from[ADAM_PATH_MAX], to[ADAM_PATH_MAX];
         struct stat st;
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (skip_fnconfig && !strcmp(e->d_name, "fnconfig.ini")) continue;
         snprintf(from, sizeof(from), "%s/%s", src, e->d_name);
         snprintf(to, sizeof(to), "%s/%s", dst, e->d_name);
         if (stat(from, &st) != 0) continue;
         if (S_ISDIR(st.st_mode))
-            rc |= copy_tree(from, to);
+            rc |= copy_tree(from, to, skip_fnconfig);
         else if (S_ISREG(st.st_mode))
             rc |= copy_file(from, to);
     }
@@ -275,8 +278,11 @@ int paths_provision_fujinet(adamsession *s)
     if (!s->fujinet_lib[0])
         return -1; /* no runtime available; session runs without FujiNet */
 
-    /* Provision the runtime tree once (keep user data on later runs). */
-    if (!is_file(s->fujinet_config)) {
+    /* First run: copy the whole tree. Later runs: refresh only data/ (the
+     * firmware's own assets, CONFIG images included) so an update reaches
+     * existing users; fnconfig.ini and SD/ are theirs and stay put. */
+    {
+        int first_run = !is_file(s->fujinet_config);
         src_root[0] = '\0';
         if (s->fujinet_src[0]) {
             snprintf(probe, sizeof(probe), "%s/fnconfig.ini",
@@ -305,20 +311,27 @@ int paths_provision_fujinet(adamsession *s)
                 snprintf(src_root, sizeof(src_root), "%s",
                          ADAM_DEV_FUJINET_OUT);
         }
-        if (!src_root[0]) {
+        if (!src_root[0] && first_run) {
             session_set_error(s, "FujiNet runtime data not found (looked in "
                               "%s and %s)", ADAM_INSTALL_DATADIR,
                               ADAM_DEV_FUJINET_OUT);
             s->fujinet_lib[0] = '\0';
             return -1;
         }
-        mkdir_p(s->fujinet_root);
-        snprintf(probe, sizeof(probe), "%s/fnconfig.ini", src_root);
-        copy_file(probe, s->fujinet_config);
-        snprintf(probe, sizeof(probe), "%s/data", src_root);
-        if (is_dir(probe)) copy_tree(probe, s->fujinet_data);
-        snprintf(probe, sizeof(probe), "%s/SD", src_root);
-        if (is_dir(probe)) copy_tree(probe, s->fujinet_sd);
+        if (src_root[0]) {
+            if (first_run) {
+                mkdir_p(s->fujinet_root);
+                snprintf(probe, sizeof(probe), "%s/fnconfig.ini", src_root);
+                copy_file(probe, s->fujinet_config);
+            }
+            snprintf(probe, sizeof(probe), "%s/data", src_root);
+            if (is_dir(probe))
+                copy_tree(probe, s->fujinet_data, !first_run);
+            if (first_run) {
+                snprintf(probe, sizeof(probe), "%s/SD", src_root);
+                if (is_dir(probe)) copy_tree(probe, s->fujinet_sd, 0);
+            }
+        }
     }
     mkdir_p(s->fujinet_sd);
     mkdir_p(s->fujinet_data);
