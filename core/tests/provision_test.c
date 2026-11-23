@@ -11,6 +11,12 @@
 #include <string.h>
 
 #include "session_internal.h"
+
+#if defined(_WIN32)
+#define set_env(k, v) _putenv_s(k, v)
+#else
+#define set_env(k, v) setenv(k, v, 1)
+#endif
 #include "test_tmpdir.h"
 
 static int failures;
@@ -55,7 +61,7 @@ int main(void)
     put(src, "SD/x", "SRCSD");
     snprintf(lib, sizeof(lib), "%s/libfujinet.so", tmp);
     put(tmp, "libfujinet.so", "");
-    setenv("FUJINET_LIB", lib, 1);
+    set_env("FUJINET_LIB", lib);
 
     snprintf(s->data_dir, sizeof(s->data_dir), "%s", data);
     snprintf(s->fujinet_src, sizeof(s->fujinet_src), "%s", src);
